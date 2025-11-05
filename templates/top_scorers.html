@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="container">
+  <h1 class="h4 mb-3">Top Scorers</h1>
+
+  <form id="ts-form" class="row g-2 align-items-end">
+    <div class="col-12 col-md-4">
+      <label class="form-label">Competition</label>
+      <select class="form-select" name="competition_id" id="competition_id" required>
+        <option value="">Loading competitions…</option>
+      </select>
+    </div>
+    <div class="col-12 col-md-3">
+      <label class="form-label">Season</label>
+      <input class="form-control" name="season" placeholder="e.g., 2023" required>
+    </div>
+    <div class="col-6 col-md-2">
+      <label class="form-label">Page size</label>
+      <input class="form-control" type="number" name="page_size" min="5" max="100" value="20">
+    </div>
+    <div class="col-6 col-md-2">
+      <label class="form-label">Page</label>
+      <input class="form-control" type="number" name="page" min="1" value="1">
+    </div>
+    <div class="col-12 col-md-1">
+      <button class="btn btn-primary w-100">Run</button>
+    </div>
+  </form>
+
+  <div class="d-flex justify-content-between align-items-center mt-3">
+    <small id="ts-meta" class="text-muted"></small>
+    <div>
+      <button id="prev-btn" class="btn btn-outline-secondary btn-sm me-2">Prev</button>
+      <button id="next-btn" class="btn btn-outline-secondary btn-sm">Next</button>
+    </div>
+  </div>
+
+  <div class="table-responsive mt-2">
+    <table class="table table-sm table-striped">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Player</th>
+          <th>Goals</th>
+        </tr>
+      </thead>
+      <tbody id="ts-tbody"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const form = document.getElementById('ts-form');
+const meta = document.getElementById('ts-meta');
+const tbody = document.getElementById('ts-tbody');
+const prevBtn = document.getElementById('prev-btn');
+const nextBtn = document.getElementById('next-btn');
+const compSel = document.getElementById('competition_id');
+
+async function loadCompetitions() {
+  const res = await fetch('/api/competitions');
+  const data = await res.json();
+  compSel.innerHTML = '<option value="">Select competition…</option>';
+  data.rows.forEach(r=>{
+    const opt = document.createElement('option');
+    opt.value = r.competition_id;
+    opt.textContent = r.competition_id;
+    compSel.appendChild(opt);
+  });
+}
+
+async function loadPage(params) {
+  const qs = new URLSearchParams(params).toString();
+  const res = await fetch('/api/top-scorers?' + qs);
+  const data = await res.json();
+
+  meta.textContent = `Competition ${params.competition_id}, Season ${params.season} — Page ${data.page} — Query time: ${data.ms} ms`;
+  tbody.innerHTML = '';
+  data.rows.forEach((r, idx) => {
+    const tr = document.createElement('tr');
+    const absoluteIndex = (data.page - 1) * data.page_size + idx + 1;
+    const name = r.player_name || r.player_id;
+    const href = `/player/profile?player_id=${r.player_id}`;
+    tr.innerHTML = `
+      <td>${absoluteIndex}</td>
+      <td class="d-flex align-items-center">
+        <img src="${r.image_url || ''}" alt="" width="24" height="24" loading="lazy"
+          onerror="this.style.display='none'" class="rounded-circle me-2">
+        <a href="${href}" class="link-primary">${name}</a>
+      </td>
+      <td>${r.goals}</td>`;
+    tbody.appendChild(tr);
+  });
+
+
+  prevBtn.disabled = (data.page <= 1);
+}
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const fd = new FormData(form);
+  const params = Object.fromEntries(fd.entries());
+  await loadPage(params);
+});
+
+prevBtn.addEventListener('click', async () => {
+  const fd = new FormData(form);
+  const params = Object.fromEntries(fd.entries());
+  params.page = Math.max(1, parseInt(params.page || '1') - 1);
+  form.querySelector('input[name="page"]').value = params.page;
+  await loadPage(params);
+});
+
+nextBtn.addEventListener('click', async () => {
+  const fd = new FormData(form);
+  const params = Object.fromEntries(fd.entries());
+  params.page = (parseInt(params.page || '1') + 1);
+  form.querySelector('input[name="page"]').value = params.page;
+  await loadPage(params);
+});
+
+// Initialize competitions and handle deep link
+(async function init() {
+  await loadCompetitions();
+  const url = new URL(window.location.href);
+  ['competition_id','season','page','page_size'].forEach(k=>{
+    if (url.searchParams.get(k)) {
+      const el = form.querySelector(`[name="${k}"]`);
+      if (el) el.value = url.searchParams.get(k);
+    }
+  });
+  if (url.searchParams.get('competition_id') && url.searchParams.get('season')) {
+    form.dispatchEvent(new Event('submit'));
+  }
+})();
+</script>
+{% endblock %}

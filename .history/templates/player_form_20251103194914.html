@@ -1,0 +1,206 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="container py-3">
+  <div class="d-flex align-items-center mb-3">
+    <h1 class="h5 mb-0">Player Form</h1>
+    <small id="pf-meta" class="text-muted ms-auto"></small>
+  </div>
+
+  <div class="card shadow-sm">
+    <div class="card-body">
+      <form id="pf" class="row g-2">
+
+        <!-- Player autocomplete -->
+        <div class="col-12 col-md-5 position-relative">
+          <label class="form-label mb-1">Player</label>
+          <div class="input-group">
+            <span class="input-group-text bg-light"><i class="bi bi-person"></i></span>
+            <input class="form-control" id="player-name" placeholder="Type player name">
+          </div>
+          <input type="hidden" id="player-id">
+          <div id="player-suggest" class="list-group position-absolute w-100 mt-1"
+               style="z-index:1000; max-height: 280px; overflow:auto;"></div>
+        </div>
+
+        <!-- Competition -->
+        <div class="col-6 col-md-3">
+          <label class="form-label mb-1">Competition</label>
+          <select class="form-select" id="competition"></select>
+        </div>
+
+        <!-- Season -->
+        <div class="col-4 col-md-2">
+          <label class="form-label mb-1">Season</label>
+          <select class="form-select" id="season"></select>
+        </div>
+
+        <!-- N -->
+        <div class="col-2 col-md-1">
+          <label class="form-label mb-1">N</label>
+          <input class="form-control" id="n" type="number" min="1" max="20" value="5">
+        </div>
+
+        <div class="col-12 col-md-1 d-grid">
+          <label class="form-label mb-1 invisible">.</label>
+          <button class="btn btn-primary" id="run-btn">
+            <i class="bi bi-play-fill me-1"></i>Run
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="card mt-3">
+    <div class="table-responsive">
+      <table class="table table-hover align-middle mb-0">
+        <thead class="table-light">
+          <tr>
+            <th style="width: 160px;">Date</th>
+            <th>Fixture</th>
+            <th class="text-end">Min</th>
+            <th class="text-end">G</th>
+            <th class="text-end">A</th>
+            <th class="text-end">YC</th>
+            <th class="text-end">RC</th>
+          </tr>
+        </thead>
+        <tbody id="pf-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- Optional icons (Bootstrap Icons CDN) -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+
+<style>
+/* Suggest list active state */
+#player-suggest a { font-size: 0.95rem; }
+#player-suggest a:hover, #player-suggest a:focus { background:#f1f3f5; }
+/* Truncate long fixtures nicely */
+.fixture { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+</style>
+
+<script>
+const nameInput = document.getElementById('player-name');
+const playerIdEl = document.getElementById('player-id');
+const suggestBox = document.getElementById('player-suggest');
+const compSel = document.getElementById('competition');
+const seasonSel = document.getElementById('season');
+const tbody = document.getElementById('pf-tbody');
+const meta = document.getElementById('pf-meta');
+
+let typingTimer;
+
+// Autocomplete search
+nameInput.addEventListener('input', ()=>{
+  clearTimeout(typingTimer);
+  const q = nameInput.value.trim();
+  playerIdEl.value = '';
+  if (!q) { suggestBox.innerHTML=''; return; }
+  typingTimer = setTimeout(async ()=>{
+    const r = await fetch('/api/players/search?q='+encodeURIComponent(q));
+    const data = await r.json();
+    suggestBox.innerHTML = '';
+    data.rows.forEach(p=>{
+      const a = document.createElement('a');
+      a.href='#';
+      a.className='list-group-item list-group-item-action d-flex align-items-center';
+      a.innerHTML = `
+        <span class="me-2 bi bi-person-circle"></span>
+        <span class="flex-grow-1">${p.name}</span>
+        <span class="text-muted small">ID ${p.player_id}</span>`;
+      a.onclick = async (e)=>{
+        e.preventDefault();
+        nameInput.value = p.name;
+        playerIdEl.value = p.player_id;
+        suggestBox.innerHTML = '';
+        await loadCompetitions(p.player_id);
+      };
+      suggestBox.appendChild(a);
+    });
+  }, 200);
+});
+
+// Populate competitions for selected player
+async function loadCompetitions(pid){
+  const res = await fetch(`/api/players/${pid}/competitions`);
+  const data = await res.json();
+  compSel.innerHTML = '';
+  data.rows.forEach(r=>{
+    const opt = document.createElement('option');
+    opt.value = r.competition_id;
+    opt.textContent = r.competition_id;
+    compSel.appendChild(opt);
+  });
+  if (compSel.value) await loadSeasons(pid, compSel.value);
+}
+
+// On competition change, (re)load seasons
+compSel.addEventListener('change', async ()=>{
+  const pid = playerIdEl.value;
+  if (pid && compSel.value) await loadSeasons(pid, compSel.value);
+});
+
+// Populate seasons for selected player + competition
+async function loadSeasons(pid, comp){
+  const res = await fetch(`/api/players/${pid}/seasons?competition_id=${encodeURIComponent(comp)}`);
+  const data = await res.json();
+  seasonSel.innerHTML = '';
+  data.rows.forEach(r=>{
+    const opt = document.createElement('option');
+    opt.value = r.season;
+    opt.textContent = r.season;
+    seasonSel.appendChild(opt);
+  });
+}
+
+// Run query and render results
+document.getElementById('run-btn').addEventListener('click', async (e)=>{
+  e.preventDefault();
+  const pid = playerIdEl.value;
+  const comp = compSel.value;
+  const season = seasonSel.value;
+  const n = document.getElementById('n').value || 5;
+  if (!pid || !comp || !season) return;
+
+  const qs = new URLSearchParams({ player_id: pid, competition_id: comp, season, n }).toString();
+  const res = await fetch('/api/player/form?'+qs);
+  const data = await res.json();
+  meta.textContent = `Query time: ${data.ms} ms`;
+
+  tbody.innerHTML='';
+  data.rows.forEach(r=>{
+    const tr=document.createElement('tr');
+    const score = `${(r.home_club_goals ?? '-') } - ${(r.away_club_goals ?? '-')}`;
+    const fixture = `${r.home_name || r.home_club_id} vs ${r.away_name || r.away_club_id}`;
+    tr.innerHTML = `
+      <td>${r.date || ''}</td>
+      <td class="fixture">${fixture} <span class="text-muted">(${score})</span></td>
+      <td class="text-end">${r.minutes_played ?? 0}</td>
+      <td class="text-end">${r.goals ?? 0}</td>
+      <td class="text-end">${r.assists ?? 0}</td>
+      <td class="text-end">${r.yellow_cards ?? 0}</td>
+      <td class="text-end">${r.red_cards ?? 0}</td>`;
+    tbody.appendChild(tr);
+  });
+});
+
+// Deep link support (?player_id=, optional competition_id/season)
+(async function initFromQuery() {
+  const url = new URL(window.location.href);
+  const pid = url.searchParams.get('player_id');
+  const cid = url.searchParams.get('competition_id');
+  const sea = url.searchParams.get('season');
+  if (pid) {
+    // fetch a single player by id to show the name in the box (reuse search)
+    const info = await (await fetch('/api/players/search?q='+encodeURIComponent(pid))).json();
+    if (info.rows.length) nameInput.value = info.rows[0].name;
+    playerIdEl.value = pid;
+    await loadCompetitions(pid);
+    if (cid) compSel.value = cid;
+    if (sea)  seasonSel.value = sea;
+  }
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="container">
+  <h1 class="h4">Player Form</h1>
+  <form id="pf" class="row g-2 align-items-end">
+  <div class="col-12 col-md-4 position-relative">
+    <label class="form-label">Player</label>
+    <input class="form-control" id="player-name" placeholder="Type player name">
+    <input type="hidden" id="player-id">
+    <div id="player-suggest" class="list-group position-absolute w-100" style="z-index:1000;"></div>
+  </div>
+
+  <div class="col-12 col-md-3">
+    <label class="form-label">Competition</label>
+    <select class="form-select" id="competition"></select>
+  </div>
+
+  <div class="col-12 col-md-3">
+    <label class="form-label">Season</label>
+    <select class="form-select" id="season"></select>
+  </div>
+
+  <div class="col-6 col-md-1">
+    <label class="form-label">N</label>
+    <input class="form-control" id="n" type="number" min="1" max="20" value="5">
+  </div>
+
+  <div class="col-6 col-md-1">
+    <button class="btn btn-primary w-100" id="run-btn">Run</button>
+  </div>
+</form>
+<small id="pf-meta" class="text-muted d-block mt-2"></small>
+<table class="table table-sm mt-2">
+  <thead><tr><th>Date</th><th>Min</th><th>G</th><th>A</th></tr></thead>
+  <tbody id="pf-tbody"></tbody>
+</table>
+</div>
+<script>
+const nameInput = document.getElementById('player-name');
+const playerIdEl = document.getElementById('player-id');
+const suggestBox = document.getElementById('player-suggest');
+const compSel = document.getElementById('competition');
+const seasonSel = document.getElementById('season');
+const tbody = document.getElementById('pf-tbody');
+const meta = document.getElementById('pf-meta');
+
+let typingTimer;
+nameInput.addEventListener('input', ()=>{
+  clearTimeout(typingTimer);
+  const q = nameInput.value.trim();
+  if (!q) { suggestBox.innerHTML=''; return; }
+  typingTimer = setTimeout(async ()=>{
+    const r = await fetch('/api/players/search?q='+encodeURIComponent(q));
+    const data = await r.json();
+    suggestBox.innerHTML = '';
+    data.rows.forEach(p=>{
+      const a = document.createElement('a');
+      a.href='#';
+      a.className='list-group-item list-group-item-action';
+      a.textContent = p.name + ' ('+p.player_id+')';
+      a.onclick = async (e)=>{
+        e.preventDefault();
+        nameInput.value = p.name;
+        playerIdEl.value = p.player_id;
+        suggestBox.innerHTML = '';
+        await loadCompetitions(p.player_id);
+      };
+      suggestBox.appendChild(a);
+    });
+  }, 200);
+});
+
+// Load competitions once player selected
+async function loadCompetitions(pid){
+  const res = await fetch(`/api/players/${pid}/competitions`);
+  const data = await res.json();
+  compSel.innerHTML = '';
+  data.rows.forEach(r=>{
+    const opt = document.createElement('option');
+    opt.value = r.competition_id;
+    opt.textContent = r.competition_id;
+    compSel.appendChild(opt);
+  });
+  if (compSel.value) await loadSeasons(pid, compSel.value);
+}
+
+compSel.addEventListener('change', async ()=>{
+  const pid = playerIdEl.value;
+  if (pid && compSel.value) await loadSeasons(pid, compSel.value);
+});
+
+async function loadSeasons(pid, comp){
+  const res = await fetch(`/api/players/${pid}/seasons?competition_id=${encodeURIComponent(comp)}`);
+  const data = await res.json();
+  seasonSel.innerHTML = '';
+  data.rows.forEach(r=>{
+    const opt = document.createElement('option');
+    opt.value = r.season;
+    opt.textContent = r.season;
+    seasonSel.appendChild(opt);
+  });
+}
+
+// Run query
+document.getElementById('run-btn').addEventListener('click', async (e)=>{
+  e.preventDefault();
+  const pid = playerIdEl.value;
+  const comp = compSel.value;
+  const season = seasonSel.value;
+  const n = document.getElementById('n').value || 5;
+  if (!pid || !comp || !season) return;
+
+  const qs = new URLSearchParams({ player_id: pid, competition_id: comp, season, n }).toString();
+  const res = await fetch('/api/player/form?'+qs);
+  const data = await res.json();
+  meta.textContent = `Query time: ${data.ms} ms`;
+  tbody.innerHTML='';
+  data.rows.forEach(r=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML = `<td>${r.date||''}</td><td>${r.minutes_played}</td><td>${r.goals}</td><td>${r.assists}</td>`;
+    tbody.appendChild(tr);
+  });
+});
+</script>
+{% endblock %}
+

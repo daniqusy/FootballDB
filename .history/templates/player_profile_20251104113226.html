@@ -1,0 +1,495 @@
+{% extends "base.html" %} {% block body %}
+
+<style>
+  /* Layout + theme */
+  .profile-hero {
+    background: #fff;
+    color: #232526;
+    border-radius: 0.75rem;
+    padding: 1.25rem 1.25rem;
+    position: relative;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+  }
+  .profile-hero .pp-img {
+    border: 3px solid rgba(255, 255, 255, 0.35);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.25);
+  }
+  .mv-chip {
+    background: rgba(255, 255, 255, 0.12);
+    padding: 0.35rem 0.6rem;
+    border-radius: 0.5rem;
+    font-weight: 600;
+  }
+  .stat-chip {
+    background: #fff;
+    border: 1px solid #eef0f4;
+    border-radius: 0.75rem;
+    padding: 0.9rem 0.6rem;
+    box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+  }
+  .stat-chip .label {
+    color: #6b7280;
+    font-size: 0.82rem;
+  }
+  .stat-chip .value {
+    font-weight: 700;
+    font-size: 1.25rem;
+  }
+
+  .filters .form-select {
+    min-width: 180px;
+  }
+  .filters .btn {
+    padding: 0.45rem 0.9rem;
+  }
+
+  .fixture-cell {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.2;
+  }
+  .fixture-home {
+    font-weight: 600;
+    color: #111827;
+  }
+  .fixture-away {
+    color: #6b7280;
+    font-size: 0.92rem;
+  }
+
+  .table thead th {
+    white-space: nowrap;
+  }
+  .table td,
+  .table th {
+    vertical-align: middle;
+  }
+
+  .subtle {
+    color: #6b7280;
+  }
+
+  @media (max-width: 768px) {
+    .filters .form-select {
+      min-width: 120px;
+    }
+  }
+</style>
+
+<div class="container py-3">
+  <!-- Hero header -->
+  <div class="profile-hero mb-3">
+    <div class="d-flex align-items-center">
+      <img
+        id="pp-img"
+        class="pp-img rounded-circle me-3"
+        width="72"
+        height="72"
+        loading="lazy"
+        onerror="this.style.display='none'"
+      />
+      <div class="me-auto">
+        <div class="d-flex align-items-center gap-2">
+          <h1 class="h4 mb-1" id="pp-name"></h1>
+          <span
+            id="pp-pos"
+            class="badge bg-light text-dark ms-2"
+            style="font-size: 1rem; font-weight: 500"
+          >
+          </span>
+        </div>
+        <div class="subtle" id="pp-club"></div>
+      </div>
+      <div class="text-end">
+        <div class="small" style="opacity: 0.9">Market value</div>
+        <div id="pp-mv" class="mv-chip">—</div>
+      </div>
+    </div>
+    <!-- Bio section -->
+    <div class="row mt-3 g-2" id="pp-bio" style="font-size: 1.02rem">
+      <div class="col-6 col-md-3">
+        <span class="subtle">Height</span><br /><span
+          id="bio-height"
+          class="fw-semibold"
+          >—</span
+        >
+        <span class="subtle">cm</span>
+      </div>
+      <div class="col-6 col-md-3">
+        <span class="subtle">Born</span><br /><span
+          id="bio-dob"
+          class="fw-semibold"
+          >—</span
+        >
+      </div>
+      <div class="col-6 col-md-3">
+        <span class="subtle">Citizenship</span><br /><span
+          id="bio-country"
+          class="fw-semibold"
+          >—</span
+        >
+      </div>
+      <div class="col-6 col-md-3">
+        <span class="subtle">Foot</span><br /><span
+          id="bio-foot"
+          class="fw-semibold"
+          >—</span
+        >
+      </div>
+      <div class="col-6 col-md-3">
+        <span class="subtle">Birth City</span><br /><span
+          id="bio-city"
+          class="fw-semibold"
+          >—</span
+        >
+      </div>
+      <div class="col-6 col-md-3">
+        <span class="subtle">Agent</span><br /><span
+          id="bio-agent"
+          class="fw-semibold"
+          >—</span
+        >
+      </div>
+      <div class="col-6 col-md-3">
+        <span class="subtle">Contract Expiry</span><br /><span
+          id="bio-contract"
+          class="fw-semibold"
+          >—</span
+        >
+      </div>
+    </div>
+  </div>
+
+  <!-- Stat chips -->
+  <div class="row g-3 mb-3">
+    <div class="col-6 col-md">
+      <div class="stat-chip text-center">
+        <div class="label">Goals</div>
+        <div id="st-goals" class="value">0</div>
+      </div>
+    </div>
+    <div class="col-6 col-md">
+      <div class="stat-chip text-center">
+        <div class="label">Assists</div>
+        <div id="st-assists" class="value">0</div>
+      </div>
+    </div>
+    <div class="col-6 col-md">
+      <div class="stat-chip text-center">
+        <div class="label">Minutes</div>
+        <div id="st-min" class="value">0</div>
+      </div>
+    </div>
+    <div class="col-6 col-md">
+      <div class="stat-chip text-center">
+        <div class="label">Yellow</div>
+        <div id="st-yc" class="value">0</div>
+      </div>
+    </div>
+    <div class="col-6 col-md">
+      <div class="stat-chip text-center">
+        <div class="label">Red</div>
+        <div id="st-rc" class="value">0</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Filters -->
+  <div class="d-flex align-items-center gap-2 mb-2 filters">
+    <select id="pp-comp" class="form-select"></select>
+    <select id="pp-season" class="form-select"></select>
+    <button id="pp-refresh" class="btn btn-primary btn-sm">Refresh</button>
+    <small id="pp-meta" class="subtle ms-auto"></small>
+  </div>
+
+  <!-- Matches -->
+  <div class="card mb-4">
+    <div class="card-header bg-white fw-semibold">Recent matches</div>
+    <div class="table-responsive">
+      <table class="table table-sm mb-0">
+        <thead class="table-light">
+          <tr>
+            <th>Date</th>
+            <th style="min-width: 260px">Fixture</th>
+            <th>Score</th>
+            <th class="text-end">
+              <span title="Minutes"
+                  ><span style="display:inline-block;vertical-align:middle;opacity:.85;">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#232526" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                  </span>
+            </th>
+            <th class="text-end">
+              <span title="Goals">
+                <img src="https://api.iconify.design/mdi:soccer.svg" alt="Goals" width="18" height="18" style="vertical-align:middle;opacity:.85;" />
+              </span>
+            </th>
+            <th class="text-end">
+              <span title="Assists">
+                <img src="https://api.iconify.design/mdi:shoe-cleat.svg" alt="Assists" width="18" height="18" style="vertical-align:middle;opacity:.85;" />
+              </span>
+            </th>
+            <th class="text-end">
+              <span title="Yellow Cards"
+                ><span
+                  style="
+                    display: inline-block;
+                    width: 18px;
+                    height: 18px;
+                    background: #ffe066;
+                    border-radius: 3px;
+                    border: 1px solid #e0c200;
+                    vertical-align: middle;
+                  "
+                ></span
+              ></span>
+            </th>
+            <th class="text-end">
+              <span title="Red Cards"
+                ><span
+                  style="
+                    display: inline-block;
+                    width: 18px;
+                    height: 18px;
+                    background: #fa5252;
+                    border-radius: 3px;
+                    border: 1px solid #c92a2a;
+                    vertical-align: middle;
+                  "
+                ></span
+              ></span>
+            </th>
+          </tr>
+        </thead>
+        <tbody id="pp-matches"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Transfers -->
+  <div class="card" id="career-card" style="display: none">
+    <div class="card-header bg-white fw-semibold">Career transfers</div>
+    <div class="table-responsive">
+      <table class="table table-sm mb-0">
+        <thead class="table-light">
+          <tr>
+            <th>Date</th>
+            <th>From</th>
+            <th>To</th>
+            <th class="text-end">Fee (€)</th>
+            <th class="text-end">Market (€)</th>
+          </tr>
+        </thead>
+        <tbody id="pp-career"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+  async function J(u) {
+    const r = await fetch(u);
+    return r.json();
+  }
+  const url = new URL(window.location.href);
+  const pid = url.searchParams.get("player_id");
+
+  function num(x) {
+    return x == null ? "—" : Number(x).toLocaleString();
+  }
+
+  async function loadProfile() {
+    const prof = await J(`/api/player/${pid}/profile`);
+    const d = prof.row || {};
+    document.getElementById("pp-name").textContent = d.name || pid;
+    document.getElementById("pp-club").textContent = d.current_club_name || "";
+    document.getElementById("pp-img").src = d.image_url || "";
+    document.getElementById("pp-mv").textContent =
+      "€" + num(d.market_value_eur);
+    let pos = d.position || "";
+    let sub = d.sub_position || "";
+    document.getElementById("pp-pos").textContent = pos
+      ? sub
+        ? `${pos} (${sub})`
+        : pos
+      : "";
+    document.getElementById("bio-height").textContent = d.height_in_cm || "—";
+    document.getElementById("bio-dob").textContent = d.dob
+      ? new Date(d.dob).toLocaleDateString()
+      : "—";
+    document.getElementById("bio-country").textContent =
+      d.country_of_citizenship || "—";
+    document.getElementById("bio-foot").textContent = d.foot
+      ? d.foot.charAt(0).toUpperCase() + d.foot.slice(1)
+      : "—";
+    document.getElementById("bio-city").textContent = d.city_of_birth || "—";
+    document.getElementById("bio-agent").textContent = d.agent_name || "—";
+    document.getElementById("bio-contract").textContent =
+      d.contract_expiration_date
+        ? new Date(d.contract_expiration_date).toLocaleDateString()
+        : "—";
+  }
+
+  let seasonsByComp = {};
+  async function loadSeasonSummary() {
+    const s = await J(`/api/player/${pid}/season-summary`);
+    const compSel = document.getElementById("pp-comp");
+    const seaSel = document.getElementById("pp-season");
+    seasonsByComp = {};
+    s.rows.forEach((r) => {
+      (seasonsByComp[r.competition_id] ||= []).push(r.season);
+    });
+    // ensure seasons are unique and newest first
+    Object.keys(seasonsByComp).forEach((cid) => {
+      seasonsByComp[cid] = Array.from(new Set(seasonsByComp[cid]))
+        .sort()
+        .reverse();
+    });
+    // Fetch competition names
+    const compRes = await J(`/api/players/${pid}/competitions`);
+    const compMap = {};
+    compRes.rows.forEach((c) => {
+      compMap[c.competition_id] = c.competition_name;
+    });
+    compSel.innerHTML = "";
+    Object.keys(seasonsByComp)
+      .sort()
+      .forEach((cid) => {
+        const o = document.createElement("option");
+        o.value = cid;
+        o.textContent = compMap[cid] || cid;
+        compSel.appendChild(o);
+      });
+    const firstComp = compSel.value;
+    seaSel.innerHTML = "";
+    (seasonsByComp[firstComp] || []).forEach((se) => {
+      const o = document.createElement("option");
+      o.value = se;
+      o.textContent = se;
+      seaSel.appendChild(o);
+    });
+    compSel.addEventListener("change", () => {
+      seaSel.innerHTML = "";
+      (seasonsByComp[compSel.value] || []).forEach((se) => {
+        const o = document.createElement("option");
+        o.value = se;
+        o.textContent = se;
+        seaSel.appendChild(o);
+      });
+    });
+  }
+
+  async function loadMatches() {
+    const cid = document.getElementById("pp-comp").value;
+    const sea = document.getElementById("pp-season").value;
+    if (!cid || !sea) return;
+    const res = await J(
+      `/api/player/${pid}/matches?competition_id=${cid}&season=${sea}&n=15`
+    );
+    document.getElementById("pp-meta").textContent = `Query time: ${res.ms} ms`;
+    const tb = document.getElementById("pp-matches");
+    tb.innerHTML = "";
+    let g = 0,
+      a = 0,
+      m = 0,
+      y = 0,
+      r = 0;
+    res.rows.forEach((row) => {
+      g += row.goals || 0;
+      a += row.assists || 0;
+      m += row.minutes_played || 0;
+      y += row.yellow_cards || 0;
+      r += row.red_cards || 0;
+      const tr = document.createElement("tr");
+      // Determine opponent club name
+      let opponent = "";
+      if (row.player_club_id && row.home_club_id && row.away_club_id) {
+        if (row.player_club_id === row.home_club_id) {
+          opponent = row.away_name || row.away_club_id;
+        } else if (row.player_club_id === row.away_club_id) {
+          opponent = row.home_name || row.home_club_id;
+        } else {
+          if (row.home_club_id !== row.player_club_id) {
+            opponent = row.home_name || row.home_club_id;
+          } else if (row.away_club_id !== row.player_club_id) {
+            opponent = row.away_name || row.away_club_id;
+          } else {
+            opponent = row.away_name || row.away_club_id;
+          }
+        }
+      } else if (row.home_club_id && row.player_club_id !== row.home_club_id) {
+        opponent = row.home_name || row.home_club_id;
+      } else if (row.away_club_id && row.player_club_id !== row.away_club_id) {
+        opponent = row.away_name || row.away_club_id;
+      } else {
+        // fallback: show away
+        opponent = row.away_name || row.away_club_id;
+      }
+      const fixture = `<div class=\"fixture-cell\">\n        <div class=\"fixture-away\">${opponent}</div>\n      </div>`;
+      // Determine outcome (W/D/L)
+      let outcome = "";
+      if (row.home_club_goals != null && row.away_club_goals != null) {
+        // Find if player played for home or away team
+        let isHome = false;
+        if (row.player_club_id && row.home_club_id && row.away_club_id) {
+          isHome = row.player_club_id === row.home_club_id;
+        } else if (row.home_name && row.away_name && row.player_club_id) {
+          // fallback: compare club names if available
+          isHome = row.player_club_id === row.home_name;
+        }
+        let hg = row.home_club_goals, ag = row.away_club_goals;
+        if (hg === ag) outcome = "D";
+        else if ((isHome && hg > ag) || (!isHome && ag > hg)) outcome = "W";
+        else outcome = "L";
+      }
+  const score = (outcome ? `<span class='fw-bold subtle me-1'>${outcome}</span>` : "") + `${row.home_club_goals ?? "-"} - ${row.away_club_goals ?? "-"}`;
+  tr.innerHTML = `
+  <td>${row.date_str || ""}</td>
+  <td>${fixture}</td>
+  <td>${score}</td>
+  <td class="text-end">${row.minutes_played || 0}</td>
+  <td class="text-end">${row.goals || 0}</td>
+  <td class="text-end">${row.assists || 0}</td>
+  <td class="text-end">${row.yellow_cards || 0}</td>
+  <td class="text-end">${row.red_cards || 0}</td>`;
+  tb.appendChild(tr);
+    });
+    document.getElementById("st-goals").textContent = g;
+    document.getElementById("st-assists").textContent = a;
+    document.getElementById("st-min").textContent = m.toLocaleString();
+    document.getElementById("st-yc").textContent = y;
+    document.getElementById("st-rc").textContent = r;
+  }
+
+  async function loadCareer() {
+    const c = await J(`/api/player/${pid}/career`);
+    const tb = document.getElementById("pp-career");
+    const card = document.getElementById("career-card");
+    tb.innerHTML = "";
+    if (c.rows.length === 0) {
+      card.style.display = "none";
+      return;
+    }
+    card.style.display = "";
+    c.rows.forEach((r) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+      <td>${r.transfer_date || ""}</td>
+      <td>${r.from_club || ""}</td>
+      <td>${r.to_club || ""}</td>
+      <td class="text-end">${num(r.transfer_fee)}</td>
+      <td class="text-end">${num(r.market_value_in_eur)}</td>`;
+      tb.appendChild(tr);
+    });
+  }
+
+  document.getElementById("pp-refresh").addEventListener("click", loadMatches);
+
+  (async function init() {
+    await loadProfile();
+    await loadSeasonSummary();
+    await loadMatches();
+    await loadCareer();
+  })();
+</script>
+
+{% endblock %}

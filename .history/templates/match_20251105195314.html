@@ -1,0 +1,290 @@
+{% extends "base.html" %} {% block body %}
+<div class="container my-3">
+  <!-- Back -->
+  <div class="mb-2">
+    <a href="/" class="text-decoration-none">&larr; Back to matches</a>
+  </div>
+
+  <!-- Match header -->
+  <div id="match-header" class="card mb-3">
+    <div class="card-body">
+      <div class="d-flex align-items-center justify-content-between">
+        <div class="d-flex align-items-center gap-3">
+          <div class="text-end">
+            <div id="home-name" class="h5 mb-1 fw-semibold"></div>
+            <div class="text-muted small" id="home-extra"></div>
+          </div>
+          <div class="h4 mb-0">
+            <span id="home-goals">-</span>
+            <span class="mx-1">–</span>
+            <span id="away-goals">-</span>
+          </div>
+          <div>
+            <div id="away-name" class="h5 mb-1 fw-semibold"></div>
+            <div class="text-muted small" id="away-extra"></div>
+          </div>
+        </div>
+        <div class="text-end">
+          <div id="date-comp" class="fw-semibold"></div>
+          <div class="text-muted small" id="venue-ref"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Key facts -->
+  <div class="row g-3 mb-3" id="facts">
+    <div class="col-12 col-md-3">
+      <div class="card h-100">
+        <div class="card-body py-2">
+          <div class="text-muted small">Round</div>
+          <div id="round" class="fw-semibold">-</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-12 col-md-3">
+      <div class="card h-100">
+        <div class="card-body py-2">
+          <div class="text-muted small">Attendance</div>
+          <div id="attendance" class="fw-semibold">-</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-12 col-md-3">
+      <div class="card h-100">
+        <div class="card-body py-2">
+          <div class="text-muted small">Formations</div>
+          <div id="formations" class="fw-semibold">-</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-12 col-md-3">
+      <div class="card h-100">
+        <div class="card-body py-2">
+          <div class="text-muted small">Managers</div>
+          <div id="managers" class="fw-semibold">-</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Events -->
+  <div class="card">
+    <div class="card-header d-flex align-items-center justify-content-between">
+      <span class="fw-semibold">Events timeline</span>
+      <div class="form-check form-switch">
+        <input
+          class="form-check-input"
+          type="checkbox"
+          id="toggle-desc"
+          checked
+        />
+        <label class="form-check-label" for="toggle-desc"
+          >Show descriptions</label
+        >
+      </div>
+    </div>
+    <div class="list-group list-group-flush" id="events"></div>
+    <div id="no-events" class="text-center text-muted py-3 d-none">
+      No events recorded
+    </div>
+  </div>
+</div>
+
+<script>
+  async function fetchJSON(u) {
+    const r = await fetch(u);
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return r.json();
+  }
+  function qs(key) {
+    return new URLSearchParams(location.search).get(key);
+  }
+  function safe(v) {
+    return v ?? "";
+  }
+  function sideClass(side) {
+    return side === "home" ? "justify-content-start" : "justify-content-end";
+  }
+  function badgeFor(type) {
+    const map = {
+      Goals: "success",
+      Cards: "warning",
+      Shootout: "dark",
+      Substitutions: "info",
+    };
+    return map[type] || "secondary";
+  }
+
+  function renderHeader(g) {
+    document.getElementById("home-name").textContent = g.home_name;
+    document.getElementById("away-name").textContent = g.away_name;
+    document.getElementById("home-goals").textContent = g.home_club_goals;
+    document.getElementById("away-goals").textContent = g.away_club_goals;
+
+    document.getElementById("home-extra").textContent = [
+      safe(g.home_club_position) ? "Pos " + g.home_club_position : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+    document.getElementById("away-extra").textContent = [
+      safe(g.away_club_position) ? "Pos " + g.away_club_position : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+
+    document.getElementById("date-comp").textContent = [
+      g.date_str,
+      g.competition_id,
+      g.competition_type,
+    ]
+      .filter(Boolean)
+      .join(" • ");
+    document.getElementById("venue-ref").textContent = [
+      safe(g.stadium),
+      safe(g.referee),
+      safe(g.match_time),
+    ]
+      .filter(Boolean)
+      .join(" • ");
+
+    document.getElementById("round").textContent = safe(g.round) || "-";
+    document.getElementById("attendance").textContent = g.attendance
+      ? g.attendance.toLocaleString()
+      : "-";
+    document.getElementById("formations").textContent =
+      [safe(g.home_club_formation), safe(g.away_club_formation)]
+        .filter(Boolean)
+        .join(" vs ") || "-";
+    document.getElementById("managers").textContent =
+      [safe(g.home_club_manager_name), safe(g.away_club_manager_name)]
+        .filter(Boolean)
+        .join(" / ") || "-";
+  }
+
+  function playerLink(id, name) {
+    if (!id || !name) return "";
+    const a = document.createElement("a");
+    a.href = `/player/profile?player_id=${encodeURIComponent(id)}`;
+    a.textContent = name;
+    a.className = "text-decoration-none";
+    return a;
+  }
+
+  function renderEvents(events) {
+    const ul = document.getElementById("events");
+    ul.innerHTML = "";
+    if (!events || events.length === 0) {
+      document.getElementById("no-events").classList.remove("d-none");
+      return;
+    }
+    document.getElementById("no-events").classList.add("d-none");
+
+    events.forEach((ev) => {
+      const li = document.createElement("li");
+      li.className = "list-group-item";
+
+      const row = document.createElement("div");
+      row.className =
+        "d-flex " +
+        (ev.side === "home" ? "justify-content-start" : "justify-content-end") +
+        " align-items-center gap-2";
+
+      const minute = document.createElement("span");
+      minute.className = "badge text-bg-light border";
+      minute.textContent = (ev.minute ?? 0) + "'";
+
+      const type = document.createElement("span");
+      type.className =
+        "badge text-bg-" +
+        ({
+          Goals: "success",
+          Cards: "warning",
+          Shootout: "dark",
+          Substitutions: "info",
+        }[ev.event_type] || "secondary");
+      type.textContent = ev.event_type;
+
+      const text = document.createElement("span");
+
+      const frag = document.createDocumentFragment();
+      let first = true;
+
+      if (ev.player_id && ev.player_name) {
+        frag.appendChild(playerLink(ev.player_id, ev.player_name));
+        first = false;
+      } else if (ev.player_name) {
+        frag.appendChild(document.createTextNode(ev.player_name));
+        first = false;
+      }
+
+      // Assist
+      if (ev.player_assist_id && ev.assist_name) {
+        frag.appendChild(document.createTextNode(first ? "" : " "));
+        frag.appendChild(document.createTextNode("(Assist: "));
+        frag.appendChild(playerLink(ev.player_assist_id, ev.assist_name));
+        frag.appendChild(document.createTextNode(")"));
+        first = false;
+      } else if (ev.assist_name) {
+        frag.appendChild(document.createTextNode(first ? "" : " "));
+        frag.appendChild(
+          document.createTextNode("(Assist: " + ev.assist_name + ")")
+        );
+        first = false;
+      }
+
+      // Substitution (player_in)
+      if (ev.player_in_id && ev.player_in_name) {
+        frag.appendChild(document.createTextNode(first ? "" : " "));
+        frag.appendChild(document.createTextNode("(In: "));
+        frag.appendChild(playerLink(ev.player_in_id, ev.player_in_name));
+        frag.appendChild(document.createTextNode(")"));
+        first = false;
+      } else if (ev.player_in_name) {
+        frag.appendChild(document.createTextNode(first ? "" : " "));
+        frag.appendChild(
+          document.createTextNode("(In: " + ev.player_in_name + ")")
+        );
+        first = false;
+      }
+
+      // Description
+      if (ev.description) {
+        frag.appendChild(document.createTextNode(first ? "" : " — "));
+        frag.appendChild(document.createTextNode(ev.description));
+      }
+
+      text.appendChild(frag);
+
+      row.appendChild(minute);
+      row.appendChild(type);
+      row.appendChild(text);
+      li.appendChild(row);
+      ul.appendChild(li);
+    });
+  }
+
+  async function init() {
+    const gid = qs("game_id");
+    if (!gid) {
+      alert("Missing game_id");
+      return;
+    }
+    try {
+      const data = await fetchJSON(
+        `/api/match?game_id=${encodeURIComponent(gid)}`
+      );
+      if (!data.game) {
+        alert("Match not found");
+        return;
+      }
+      renderHeader(data.game);
+      renderEvents(data.events || []);
+    } catch (e) {
+      console.error(e);
+      alert("Failed to load match data");
+    }
+  }
+  init();
+</script>
+{% endblock %}

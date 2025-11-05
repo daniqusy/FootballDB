@@ -1,0 +1,127 @@
+<div class="card mb-3">
+  <div class="card-body d-flex align-items-center">
+    <img id="pp-img" class="rounded-circle me-3" width="64" height="64" loading="lazy"
+         onerror="this.style.display='none'">
+    <div>
+      <h1 class="h5 mb-1" id="pp-name"></h1>
+      <div class="text-muted" id="pp-club"></div>
+    </div>
+    <div class="ms-auto text-end">
+      <div class="small text-muted">Market value</div>
+      <div id="pp-mv" class="fw-semibold"></div>
+    </div>
+  </div>
+</div>
+<div class="row text-center g-2" id="stats-strip">
+  <div class="col"><div class="card p-2"><div class="small text-muted">Goals</div><div id="st-goals" class="fs-5 fw-bold">0</div></div></div>
+  <div class="col"><div class="card p-2"><div class="small text-muted">Assists</div><div id="st-assists" class="fs-5 fw-bold">0</div></div></div>
+  <div class="col"><div class="card p-2"><div class="small text-muted">Minutes</div><div id="st-min" class="fs-5 fw-bold">0</div></div></div>
+  <div class="col"><div class="card p-2"><div class="small text-muted">YC</div><div id="st-yc" class="fs-5 fw-bold">0</div></div></div>
+  <div class="col"><div class="card p-2"><div class="small text-muted">RC</div><div id="st-rc" class="fs-5 fw-bold">0</div></div></div>
+</div>
+<div class="d-flex align-items-center mt-3">
+  <select id="pp-comp" class="form-select me-2" style="max-width:220px"></select>
+  <select id="pp-season" class="form-select me-2" style="max-width:160px"></select>
+  <button id="pp-refresh" class="btn btn-primary btn-sm">Refresh</button>
+  <small id="pp-meta" class="text-muted ms-auto"></small>
+</div>
+
+<table class="table table-sm mt-2">
+  <thead><tr><th>Date</th><th>Fixture</th><th>Score</th><th>Min</th><th>G</th><th>A</th><th>YC</th><th>RC</th></tr></thead>
+  <tbody id="pp-matches"></tbody>
+</table>
+<h2 class="h6 mt-4">Career transfers</h2>
+<table class="table table-sm">
+  <thead><tr><th>Date</th><th>From</th><th>To</th><th>Fee (€)</th><th>Market (€)</th></tr></thead>
+  <tbody id="pp-career"></tbody>
+</table>
+
+<script>
+async function J(u){ const r=await fetch(u); return r.json(); }
+const url = new URL(window.location.href); const pid = url.searchParams.get('player_id');
+
+function num(x){ return x==null? '—' : Number(x).toLocaleString(); }
+
+async function loadProfile(){
+  const prof = await J(`/api/player/${pid}/profile`);
+  const d = prof.row || {};
+  document.getElementById('pp-name').textContent = d.name || pid;
+  document.getElementById('pp-club').textContent = d.current_club_name || '';
+  document.getElementById('pp-img').src = d.image_url || '';
+  document.getElementById('pp-mv').textContent = '€'+num(d.market_value_eur);
+}
+
+let seasonsByComp = {};
+async function loadSeasonSummary(){
+  const s = await J(`/api/player/${pid}/season-summary`);
+  // populate selects
+  const compSel = document.getElementById('pp-comp');
+  const seaSel  = document.getElementById('pp-season');
+  seasonsByComp = {};
+  s.rows.forEach(r=>{
+    (seasonsByComp[r.competition_id] ||= []).push(r.season);
+  });
+  compSel.innerHTML=''; Object.keys(seasonsByComp).forEach(cid=>{
+    const o=document.createElement('option'); o.value=cid; o.textContent=cid; compSel.appendChild(o);
+  });
+  // preselect latest season on first comp
+  const firstComp = compSel.value;
+  seaSel.innerHTML=''; (seasonsByComp[firstComp]||[]).forEach(se=>{
+    const o=document.createElement('option'); o.value=se; o.textContent=se; seaSel.appendChild(o);
+  });
+  compSel.addEventListener('change', ()=>{
+    seaSel.innerHTML=''; (seasonsByComp[compSel.value]||[]).forEach(se=>{
+      const o=document.createElement('option'); o.value=se; o.textContent=se; seaSel.appendChild(o);
+    });
+  });
+}
+
+async function loadMatches(){
+  const cid = document.getElementById('pp-comp').value;
+  const sea = document.getElementById('pp-season').value;
+  const res = await J(`/api/player/${pid}/matches?competition_id=${cid}&season=${sea}&n=15`);
+  document.getElementById('pp-meta').textContent = `Query time: ${res.ms} ms`;
+  const tb = document.getElementById('pp-matches'); tb.innerHTML='';
+  let g=0,a=0,m=0,y=0,r=0;
+  res.rows.forEach(row=>{
+    g+=row.goals||0; a+=row.assists||0; m+=row.minutes_played||0; y+=row.yellow_cards||0; r+=row.red_cards||0;
+    const tr=document.createElement('tr');
+    const fixture = `${row.home_club_id} vs ${row.away_club_id}`; // swap to names if you enrich API
+    const score   = `${row.home_club_goals ?? '-'} - ${row.away_club_goals ?? '-'}`;
+    tr.innerHTML = `<td>${row.date||''}</td><td>${fixture}</td><td>${score}</td>
+                    <td>${row.minutes_played||0}</td><td>${row.goals||0}</td><td>${row.assists||0}</td>
+                    <td>${row.yellow_cards||0}</td><td>${row.red_cards||0}</td>`;
+    tb.appendChild(tr);
+  });
+  document.getElementById('st-goals').textContent=g;
+  document.getElementById('st-assists').textContent=a;
+  document.getElementById('st-min').textContent=m.toLocaleString();
+  document.getElementById('st-yc').textContent=y;
+  document.getElementById('st-rc').textContent=r;
+}
+
+async function loadCareer(){
+  const c = await J(`/api/player/${pid}/career`);
+  const tb=document.getElementById('pp-career'); tb.innerHTML='';
+  c.rows.forEach(r=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML = `<td>${r.transfer_date||''}</td>
+      <td>${r.from_club||''}</td><td>${r.to_club||''}</td>
+      <td>${num(r.transfer_fee)}</td><td>${num(r.market_value_in_eur)}</td>`;
+    tb.appendChild(tr);
+  });
+}
+
+document.getElementById('pp-refresh').addEventListener('click', async ()=>{
+  await loadMatches();
+});
+
+(async function init(){
+  await loadProfile();
+  await loadSeasonSummary();
+  await loadMatches();
+  await loadCareer();
+})();
+</script>
+
+

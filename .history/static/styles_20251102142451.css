@@ -1,0 +1,39 @@
+.table td, .table th { vertical-align: middle; }
+
+.league-card {
+  border-radius: 1rem;
+  background: #181a1b !important;
+  color: #fff !important;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+}
+.league-card .card-header {
+  background: #181a1b !important;
+  color: #fff !important;
+  font-weight: 600;
+  border-radius: 1rem 1rem 0 0;
+  border: none;
+  font-size: 1.1rem;
+}
+.league-card .fixture-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: .7rem 1.1rem;
+  border-bottom: 1px solid #23272b;
+  background: transparent;
+}
+.league-card .score-box {
+  background: #000 !important;
+  color: #fff !important;
+  font-weight: 700;
+  font-size: 1.15rem;
+  border-radius: .5rem;
+  min-width: 80px;
+  text-align: center;
+  letter-spacing: .5px;
+}
+.league-card .badge {
+  font-size: .85rem;
+  background: #444 !important;
+  color: #fff !important;
+}

@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="container-fluid">
+  <div class="row">
+    <!-- Left: leagues -->
+    <aside class="col-12 col-lg-2 mb-3">
+      <div class="card">
+        <div class="card-header fw-semibold">Top leagues</div>
+        <ul class="list-group list-group-flush" id="leagues-list">
+          <li class="list-group-item text-muted">Loading…</li>
+        </ul>
+      </div>
+    </aside>
+
+    <!-- Center: matches feed by date -->
+    <main class="col-12 col-lg-7 mb-3">
+      <div class="d-flex align-items-center mb-2">
+        <h2 class="h5 mb-0 me-3">Matches</h2>
+        <input type="date" id="match-date" class="form-control form-control-sm" style="max-width: 180px;">
+        <button id="go-btn" class="btn btn-sm btn-primary ms-2">Go</button>
+        <small id="matches-meta" class="text-muted ms-auto"></small>
+      </div>
+      <div id="matches-container" class="vstack gap-3"></div>
+    </main>
+
+    <!-- Right: top players by market value -->
+    <aside class="col-12 col-lg-3 mb-3">
+      <div class="card">
+        <div class="card-header fw-semibold">Top market values</div>
+        <ul class="list-group list-group-flush" id="top-market">
+          <li class="list-group-item text-muted">Loading…</li>
+        </ul>
+        <div class="card-footer"><small id="market-meta" class="text-muted"></small></div>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<script>
+async function fetchJSON(url){ const r=await fetch(url); return r.json(); }
+
+async function loadLeagues(){
+  const data = await fetchJSON('/api/competitions');
+  const ul = document.getElementById('leagues-list');
+  ul.innerHTML='';
+  data.rows.forEach(l=>{
+    const id = l.league_id ?? l.competition_id;
+    const li=document.createElement('li');
+    li.className='list-group-item d-flex justify-content-between align-items-center';
+    li.innerHTML = `<span>${id}</span>
+      <a class="btn btn-sm btn-outline-secondary" href="/top-scorers?competition_id=${l.league_id}&season=">Open</a>`;
+    ul.appendChild(li);
+  });
+}
+
+function groupBy(xs, key){ return xs.reduce((acc,x)=>{(acc[x[key]] ||= []).push(x);return acc;},{}); }
+
+async function loadMatches(dateStr){
+  const meta = document.getElementById('matches-meta');
+  const cont = document.getElementById('matches-container');
+  cont.innerHTML = '';
+  const data = await fetchJSON('/api/matches/by-date?date='+encodeURIComponent(dateStr));
+  meta.textContent = `Date ${data.date} — ${data.rows.length} matches — ${data.ms} ms`;
+  const byLeague = groupBy(data.rows,'league_id');
+
+  Object.keys(byLeague).sort().forEach(league=>{
+    const card = document.createElement('div');
+    card.className='card league-card mb-3';
+
+    const header = document.createElement('div');
+    header.className='card-header';
+    header.textContent = `<span class="fw-semibold">${league}</span>`;
+    card.appendChild(header);
+
+    const listWrap = document.createElement('div');
+
+    byLeague[league].forEach(m=>{
+        const hn = m.home_name || m.home_club_id;
+        const an = m.away_name || m.away_club_id;
+        const hs = (m.home_club_goals ?? '-') ;
+        const as = (m.away_club_goals ?? '-') ;
+        
+        const row = document.createElement('div');
+        row.className = 'fixture-row';
+
+        row.innerHTML = `
+        <div class="fixture-teams">
+            <div class="fixture-home">${hn}</div>
+            <div class="fixture-away">${an}</div>
+        </div>
+        <div class="fixture-score">${hs} - ${as}</div>
+        `;
+        listWrap.appendChild(row);
+});
+
+
+    card.appendChild(listWrap);
+    cont.appendChild(card);
+  });
+}
+
+async function loadTopMarket(){
+  const data = await fetchJSON('/api/players/top-market?k=10');
+  const ul = document.getElementById('top-market');
+  const meta = document.getElementById('market-meta');
+  ul.innerHTML='';
+  data.rows.forEach((p, idx)=>{
+    const li=document.createElement('li');
+    li.className='list-group-item d-flex justify-content-between align-items-center';
+    const val = (p.market_value_eur ?? 0).toLocaleString();
+    li.innerHTML = `<span>${idx+1}. ${p.name || 'Player '+p.player_id}</span>
+                    <span class="badge text-bg-success">€${val}</span>`;
+    ul.appendChild(li);
+  });
+  meta.textContent = `Query time: ${data.ms} ms`;
+}
+
+async function fetchJSON(u){ const r=await fetch(u); return r.json(); }
+
+async function initDateAndLoad(){
+  const input = document.getElementById('match-date');
+  try {
+    const d = await fetchJSON('/api/matches/max-date');
+    const max = d.max_date; // 'YYYY-MM-DD' or null
+    if (max) {
+      input.max = max;
+      input.value = max;
+      await loadMatches(max);
+    } else {
+      // No games in DB; disable controls and show empty state
+      input.disabled = true;
+      document.getElementById('go-btn').disabled = true;
+      document.getElementById('matches-meta').textContent = 'No matches available';
+    }
+  } catch (e) {
+    // Fallback: today, but cap by today
+    const today = new Date().toISOString().slice(0,10);
+    input.max = today;
+    input.value = today;
+    await loadMatches(today);
+  }
+}
+
+document.getElementById('go-btn').addEventListener('click', async ()=>{
+  const v = document.getElementById('match-date').value;
+  if (v) await loadMatches(v);
+});
+
+// Run initial loads
+loadLeagues();
+loadTopMarket();
+initDateAndLoad();
+</script>
+{% endblock %}

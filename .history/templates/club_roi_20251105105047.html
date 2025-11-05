@@ -1,0 +1,176 @@
+{% extends "base.html" %} {% block body %}
+<div class="container">
+  <h1 class="h4 mb-3">Club Transfer ROI</h1>
+
+  <form id="roi-form" class="row g-2 align-items-end">
+    <div class="col-12 col-md-5 position-relative">
+      <label class="form-label">Club</label>
+      <input class="form-control" id="club-name" placeholder="Type club name" />
+      <input type="hidden" id="club-id" />
+      <div
+        id="club-suggest"
+        class="list-group position-absolute w-100"
+        style="z-index: 1000"
+      ></div>
+    </div>
+    <div class="col-12 col-md-3">
+      <label class="form-label">Season</label>
+      <select id="season" class="form-select" required></select>
+    </div>
+    <div class="col-12 col-md-2">
+      <label class="form-label">Sort by</label>
+      <select id="sort_by" class="form-select">
+        <option value="post_minutes" selected>Post minutes</option>
+        <option value="post_goals">Post goals</option>
+        <option value="post_assists">Post assists</option>
+        <option value="eur_per_contrib">EUR/Contrib</option>
+        <option value="eur_per_minutes">EUR/Minutes</option>
+        <option value="transfer_fee">Transfer fee</option>
+        <option value="market_value_in_eur">Market value</option>
+      </select>
+    </div>
+    <div class="col-12 col-md-2">
+      <label class="form-label">Order</label>
+      <select id="order" class="form-select">
+        <option value="desc" selected>Desc</option>
+        <option value="asc">Asc</option>
+      </select>
+    </div>
+    <div class="col-12 col-md-0">
+      <button class="btn btn-primary" id="go">Run</button>
+    </div>
+  </form>
+
+  <div class="d-flex justify-content-between align-items-center mt-2">
+    <small id="roi-meta" class="text-muted"></small>
+  </div>
+
+  <div class="table-responsive mt-2">
+    <table class="table table-sm table-striped">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Player</th>
+          <th>Fee (€)</th>
+          <th>Market (€)</th>
+          <th>Minutes</th>
+          <th>G</th>
+          <th>A</th>
+          <th>EUR/Min</th>
+          <th>EUR/Contrib</th>
+        </tr>
+      </thead>
+      <tbody id="roi-body"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+  const clubName = document.getElementById("club-name");
+  const clubIdEl = document.getElementById("club-id");
+  const clubSug = document.getElementById("club-suggest");
+  const seasonSel = document.getElementById("season");
+  const sortSel = document.getElementById("sort_by");
+  const orderSel = document.getElementById("order");
+  const bodyEl = document.getElementById("roi-body");
+  const meta = document.getElementById("roi-meta");
+
+  let clubTypeTimer;
+  clubName.addEventListener("input", () => {
+    clearTimeout(clubTypeTimer);
+    const q = clubName.value.trim();
+    clubIdEl.value = "";
+    if (!q) {
+      clubSug.innerHTML = "";
+      seasonSel.innerHTML = "";
+      return;
+    }
+    clubTypeTimer = setTimeout(async () => {
+      const res = await fetch("/api/clubs/search?q=" + encodeURIComponent(q));
+      const data = await res.json();
+      clubSug.innerHTML = "";
+      data.rows.forEach((c) => {
+        const a = document.createElement("a");
+        a.href = "#";
+        a.className = "list-group-item list-group-item-action";
+        a.textContent = c.name + " (" + c.club_id + ")";
+        a.onclick = async (e) => {
+          e.preventDefault();
+          clubName.value = c.name;
+          clubIdEl.value = c.club_id;
+          clubSug.innerHTML = "";
+          await loadSeasons(c.club_id);
+        };
+        clubSug.appendChild(a);
+      });
+    }, 200);
+  });
+
+  async function loadSeasons(club_id) {
+    const data = await (await fetch(`/api/clubs/${club_id}/seasons`)).json();
+    seasonSel.innerHTML = "";
+    data.rows.forEach((r) => {
+      const opt = document.createElement("option");
+      opt.value = r.season;
+      opt.textContent = r.season;
+      seasonSel.appendChild(opt);
+    });
+  }
+
+  async function runROI() {
+    const club_id = clubIdEl.value;
+    const season = seasonSel.value;
+    const sort_by = sortSel.value;
+    const order = orderSel.value;
+    if (!club_id || !season) return;
+    const qs = new URLSearchParams({
+      club_id,
+      season,
+      sort_by,
+      order,
+    }).toString();
+    const data = await (await fetch("/api/club/roi?" + qs)).json();
+    meta.textContent = `Rows ${data.rows.length} — Query time: ${data.ms} ms`;
+    bodyEl.innerHTML = "";
+    data.rows.forEach((r, i) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+      <td>${i + 1}</td>
+      <td><a href="/player/form?player_id=${r.player_id}">${
+        r.player_name || r.player_id
+      }</a></td>
+      <td>${(r.transfer_fee ?? 0).toLocaleString()}</td>
+      <td>${(r.market_value_in_eur ?? 0).toLocaleString()}</td>
+      <td>${(r.post_minutes ?? 0).toLocaleString()}</td>
+      <td>${r.post_goals ?? 0}</td>
+      <td>${r.post_assists ?? 0}</td>
+      <td>${r.eur_per_minutes ?? "—"}</td>
+      <td>${r.eur_per_contrib ?? "—"}</td>`;
+      bodyEl.appendChild(tr);
+    });
+  }
+
+  document.getElementById("go").addEventListener("click", async (e) => {
+    e.preventDefault();
+    await runROI();
+  });
+
+  // Deep link support (?club_id=&season=)
+  (async function init() {
+    const url = new URL(window.location.href);
+    const cid = url.searchParams.get("club_id");
+    const seas = url.searchParams.get("season");
+    if (cid) {
+      // fetch name for display
+      const info = await (
+        await fetch("/api/clubs/search?q=" + encodeURIComponent(cid))
+      ).json();
+      clubIdEl.value = cid;
+      if (info.rows.length) clubName.value = info.rows[0].name;
+      await loadSeasons(cid);
+    }
+    if (seas) seasonSel.value = seas;
+    if (clubIdEl.value && seasonSel.value) await runROI();
+  })();
+</script>
+{% endblock %}
