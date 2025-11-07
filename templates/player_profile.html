@@ -1,78 +1,79 @@
 {% extends "base.html" %} {% block body %}
 
 <style>
+  :root {
+    --ink-900: #111827;
+    --ink-700: #374151;
+    --ink-500: #6b7280;
+    --bg-card: #ffffff;
+    --bg-soft: #f8fafc;
+    --brand-500: #2563eb;
+    --brand-600: #1d4ed8;
+    --success-500: #16a34a;
+    --warning-500: #f59e0b;
+    --danger-500: #ef4444;
+  }
+
   /* Layout + theme */
   .profile-hero {
-    background: #fff;
-    color: #232526;
-    border-radius: 0.75rem;
+    background: radial-gradient(1200px 500px at -10% -50%, rgba(37,99,235,0.08), rgba(37,99,235,0) 50%),
+                radial-gradient(1200px 500px at 110% -50%, rgba(99,102,241,0.08), rgba(99,102,241,0) 50%),
+                var(--bg-card);
+    color: var(--ink-900);
+    border-radius: 1rem;
     padding: 1.25rem 1.25rem;
     position: relative;
-    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+    box-shadow: 0 6px 24px rgba(16, 24, 40, 0.08);
+    border: 1px solid #eef2f7;
   }
   .profile-hero .pp-img {
-    border: 3px solid rgba(255, 255, 255, 0.35);
-    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.25);
+    border: 4px solid #fff;
+    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.2);
   }
   .mv-chip {
-    background: rgba(255, 255, 255, 0.12);
-    padding: 0.35rem 0.6rem;
+    background: #ecf2ff;
+    color: var(--brand-600);
+    padding: 0.4rem 0.6rem;
     border-radius: 0.5rem;
-    font-weight: 600;
+    font-weight: 700;
   }
   .stat-chip {
-    background: #fff;
+    background: var(--bg-card);
     border: 1px solid #eef0f4;
-    border-radius: 0.75rem;
-    padding: 0.9rem 0.6rem;
+    border-radius: 0.9rem;
+    padding: 0.9rem 0.8rem;
     box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+    transition: transform .15s ease, box-shadow .15s ease;
   }
+  .stat-chip:hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(16,24,40,.08); }
   .stat-chip .label {
-    color: #6b7280;
-    font-size: 0.82rem;
+    color: var(--ink-500);
+    font-size: 0.8rem;
+    letter-spacing: .02em;
+    text-transform: uppercase;
   }
-  .stat-chip .value {
-    font-weight: 700;
-    font-size: 1.25rem;
-  }
+  .stat-chip .value { font-weight: 800; font-size: 1.25rem; color: var(--ink-900) }
 
-  .filters .form-select {
-    min-width: 180px;
-  }
-  .filters .btn {
-    padding: 0.45rem 0.9rem;
-  }
+  .filters .form-select { min-width: 180px; }
+  .filters .btn { padding: 0.45rem 0.9rem; }
+  .filters .filter-label { color: var(--ink-500); font-weight: 600; font-size: .85rem; margin-right: .35rem; }
 
-  .fixture-cell {
-    display: flex;
-    flex-direction: column;
-    line-height: 1.2;
-  }
-  .fixture-home {
-    font-weight: 600;
-    color: #111827;
-  }
-  .fixture-away {
-    color: #6b7280;
-    font-size: 0.92rem;
-  }
+  .table thead th { white-space: nowrap; }
+  .table td, .table th { vertical-align: middle; }
+  .table tbody tr:hover { background: #fbfdff; }
 
-  .table thead th {
-    white-space: nowrap;
-  }
-  .table td,
-  .table th {
-    vertical-align: middle;
-  }
+  .subtle { color: var(--ink-500); }
 
-  .subtle {
-    color: #6b7280;
-  }
+  .clickable { cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+  .clickable:hover { color: var(--brand-600); }
+
+  .outcome-badge { font-weight: 800; letter-spacing: .04em; }
+  .outcome-W { background: #e9f8ef; color: var(--success-500); }
+  .outcome-D { background: #fff7e6; color: var(--warning-500); }
+  .outcome-L { background: #feecec; color: var(--danger-500); }
 
   @media (max-width: 768px) {
-    .filters .form-select {
-      min-width: 120px;
-    }
+    .filters .form-select { min-width: 120px; }
   }
 </style>
 
@@ -90,7 +91,7 @@
       />
       <div class="me-auto">
         <div class="d-flex align-items-center gap-2">
-          <h1 class="h4 mb-1" id="pp-name"></h1>
+          <h1 class="h4 mb-1" id="pp-name" style="font-weight: 800; letter-spacing: .2px"></h1>
           <span
             id="pp-pos"
             class="badge bg-light text-dark ms-2"
@@ -98,7 +99,7 @@
           >
           </span>
         </div>
-        <div class="subtle" id="pp-club"></div>
+  <div class="subtle"><span id="pp-club" class="clickable"></span></div>
       </div>
       <div class="text-end">
         <div class="small" style="opacity: 0.9">Market value</div>
@@ -116,16 +117,16 @@
         <span class="subtle">cm</span>
       </div>
       <div class="col-6 col-md-3">
-        <span class="subtle">Born</span><br /><span
+        <span class="subtle">Age</span><br /><span
           id="bio-dob"
-          class="fw-semibold"
+          class="fw-semibold clickable"
           >—</span
         >
       </div>
       <div class="col-6 col-md-3">
         <span class="subtle">Citizenship</span><br /><span
           id="bio-country"
-          class="fw-semibold"
+          class="fw-semibold clickable"
           >—</span
         >
       </div>
@@ -139,14 +140,14 @@
       <div class="col-6 col-md-3">
         <span class="subtle">Birth City</span><br /><span
           id="bio-city"
-          class="fw-semibold"
+          class="fw-semibold clickable"
           >—</span
         >
       </div>
       <div class="col-6 col-md-3">
         <span class="subtle">Agent</span><br /><span
           id="bio-agent"
-          class="fw-semibold"
+          class="fw-semibold clickable"
           >—</span
         >
       </div>
@@ -196,7 +197,9 @@
 
   <!-- Filters -->
   <div class="d-flex align-items-center gap-2 mb-2 filters">
+    <span class="filter-label">Competition</span>
     <select id="pp-comp" class="form-select"></select>
+    <span class="filter-label">Season</span>
     <select id="pp-season" class="form-select"></select>
     <button id="pp-refresh" class="btn btn-primary btn-sm">Refresh</button>
     <small id="pp-meta" class="subtle ms-auto"></small>
@@ -285,6 +288,38 @@
   </div>
 </div>
 
+<!-- Modal: Market value comparison -->
+<div class="modal fade" id="mv-compare-modal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-scrollable modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="mv-compare-title">Market value comparison</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div class="table-responsive">
+          <table class="table table-sm align-middle mb-0">
+            <thead class="table-light">
+              <tr>
+                <th style="width:60px">Rank</th>
+                <th>Name</th>
+                <th class="text-end">Market value (€)</th>
+              </tr>
+            </thead>
+            <tbody id="mv-compare-body">
+              <tr><td colspan="3" class="text-center text-muted">No data</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <small id="mv-compare-meta" class="text-muted me-auto"></small>
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+  </div>
+
 <script>
   async function J(u) {
     const r = await fetch(u);
@@ -297,6 +332,16 @@
     return x == null ? "—" : Number(x).toLocaleString();
   }
 
+  function ageFromDob(dobStr) {
+    const dob = new Date(dobStr);
+    if (isNaN(dob)) return null;
+    const today = new Date();
+    let age = today.getFullYear() - dob.getFullYear();
+    const m = today.getMonth() - dob.getMonth();
+    if (m < 0 || (m === 0 && today.getDate() < dob.getDate())) age--;
+    return age;
+  }
+
   async function loadProfile() {
     const prof = await J(`/api/player/${pid}/profile`);
     const d = prof.row || {};
@@ -307,15 +352,17 @@
       "€" + num(d.market_value_eur);
     let pos = d.position || "";
     let sub = d.sub_position || "";
-    document.getElementById("pp-pos").textContent = pos
+    const posEl = document.getElementById("pp-pos");
+    posEl.textContent = pos
       ? sub
         ? `${pos} (${sub})`
         : pos
       : "";
+    posEl.classList.add("clickable");
     document.getElementById("bio-height").textContent = d.height_in_cm || "—";
-    document.getElementById("bio-dob").textContent = d.dob
-      ? new Date(d.dob).toLocaleDateString()
-      : "—";
+    const age = d.dob ? ageFromDob(d.dob) : null;
+    document.getElementById("bio-dob").textContent =
+      age != null ? `${age} years` : "—";
     document.getElementById("bio-country").textContent =
       d.country_of_citizenship || "—";
     document.getElementById("bio-foot").textContent = d.foot
@@ -327,6 +374,19 @@
       d.contract_expiration_date
         ? new Date(d.contract_expiration_date).toLocaleDateString()
         : "—";
+
+    // Attach compare interactions
+    const attach = (el, cat, val, label) => {
+      if (!val) return;
+      el.addEventListener("click", () => openCompare(cat, val, label));
+      el.title = `Compare by ${cat}`;
+    };
+    attach(document.getElementById("bio-dob"), "age", age, `${age} years`);
+    attach(document.getElementById("bio-country"), "citizenship", d.country_of_citizenship, d.country_of_citizenship);
+    attach(document.getElementById("pp-club"), "club", d.current_club_id, d.current_club_name);
+    attach(posEl, "position", d.position, d.position);
+    attach(document.getElementById("bio-agent"), "agent", d.agent_name, d.agent_name);
+    attach(document.getElementById("bio-city"), "city", d.city_of_birth, d.city_of_birth);
   }
 
   let seasonsByComp = {};
@@ -346,10 +406,20 @@
     });
     // Fetch competition names
     const compRes = await J(`/api/players/${pid}/competitions`);
-    const compMap = {};
+    const compMap = {}; // id -> name
+    const typeMap = {}; // id -> type
     compRes.rows.forEach((c) => {
       compMap[c.competition_id] = c.competition_name;
+      typeMap[c.competition_id] = c.competition_type || "";
     });
+    const normalizeType = (t) => String(t || "").toLowerCase().replace(/_/g, "-");
+    // choose default comp: prefer domestic league
+    let defaultCid = null;
+    for (const cid of Object.keys(seasonsByComp).sort()) {
+      const tt = normalizeType(typeMap[cid]);
+      if (tt.includes("domestic") && tt.includes("league")) { defaultCid = cid; break; }
+    }
+    if (!defaultCid) defaultCid = Object.keys(seasonsByComp).sort()[0];
     compSel.innerHTML = "";
     Object.keys(seasonsByComp)
       .sort()
@@ -357,9 +427,10 @@
         const o = document.createElement("option");
         o.value = cid;
         o.textContent = compMap[cid] || cid;
+        if (cid === defaultCid) o.selected = true;
         compSel.appendChild(o);
       });
-    const firstComp = compSel.value;
+    const firstComp = compSel.value || defaultCid;
     seaSel.innerHTML = "";
     (seasonsByComp[firstComp] || []).forEach((se) => {
       const o = document.createElement("option");
@@ -411,8 +482,8 @@
         }
       }
       const fixture = `<span>${opponent}</span>`;
-      // Determine outcome (W/D/L)
-      let outcome = "";
+  // Determine outcome (W/D/L)
+  let outcome = "";
       if (playerClubName) {
         if (row.home_name === playerClubName) {
           if (row.home_club_goals > row.away_club_goals) outcome = "W";
@@ -424,7 +495,9 @@
           else outcome = "L";
         }
       }
-      const score = `<span style=\"font-weight:700;display:inline-block;width:1.5em;text-align:center;\">${outcome}</span> ${row.home_club_goals ?? "-"} - ${row.away_club_goals ?? "-"}`;
+      const score = `
+        <span class="badge outcome-badge outcome-${outcome}" style="min-width:1.9em;display:inline-block;text-align:center;">${outcome || '-'}</span>
+        <span class="ms-1">${row.home_club_goals ?? "-"} - ${row.away_club_goals ?? "-"}</span>`;
       let formattedDate = "";
       if (row.date_str) {
         const d = new Date(row.date_str);
@@ -477,6 +550,42 @@
   }
 
   document.getElementById("pp-refresh").addEventListener("click", loadMatches);
+
+  async function openCompare(category, value, label) {
+    const title = document.getElementById("mv-compare-title");
+    const body = document.getElementById("mv-compare-body");
+    const meta = document.getElementById("mv-compare-meta");
+    title.textContent = `Market value vs ${category}: ${label ?? value}`;
+    body.innerHTML = `<tr><td colspan="3" class="text-center text-muted">Loading…</td></tr>`;
+    try {
+      const data = await J(`/api/market-compare?category=${encodeURIComponent(category)}&value=${encodeURIComponent(value)}&limit=100`);
+      const rows = data.rows || [];
+      if (!rows.length) {
+        body.innerHTML = `<tr><td colspan="3" class="text-center text-muted">No data</td></tr>`;
+      } else {
+        body.innerHTML = "";
+        let rank = 1;
+        rows.forEach((r) => {
+          const tr = document.createElement("tr");
+          const isSelf = String(r.player_id) === String(pid);
+          tr.innerHTML = `
+            <td>${rank++}</td>
+            <td>${isSelf ? '<span class="badge text-bg-info me-1">You</span>' : ''}<a href="/player/profile?player_id=${r.player_id}" class="text-decoration-none">${r.name || r.player_id}</a></td>
+            <td class="text-end">€${num(r.market_value_eur)}</td>
+          `;
+          if (isSelf) tr.classList.add("table-primary");
+          body.appendChild(tr);
+        });
+      }
+      meta.textContent = `Query time: ${data.ms} ms • ${rows.length} players`;
+    } catch (e) {
+      body.innerHTML = `<tr><td colspan="3" class="text-center text-danger">Error loading data</td></tr>`;
+      meta.textContent = "";
+    }
+    // Show modal (Bootstrap 5)
+    let m = bootstrap.Modal.getOrCreateInstance(document.getElementById("mv-compare-modal"));
+    m.show();
+  }
 
   (async function init() {
     await loadProfile();

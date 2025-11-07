@@ -1,12 +1,87 @@
 {% extends "base.html" %} {% block body %}
+<style>
+  /* Home page polish */
+  .card {
+    border: 1px solid #eef2f7;
+    border-radius: 1rem;
+  }
+  .card-header {
+    background: #fff;
+    border-bottom: 1px solid #eef2f7;
+  }
+  .fixture-row {
+    transition: background 0.15s ease, transform 0.12s ease;
+  }
+  .fixture-row:hover {
+    background: #fbfdff;
+    transform: translateY(-1px);
+  }
+  .score-box {
+    background: linear-gradient(180deg, #f8fafc, #eef2f7);
+    border: 1px solid #e5e7eb;
+  }
+  .search-empty {
+    color: #6b7280;
+  }
+  .list-group-item.active {
+    background-color: #1d4ed8;
+    border-color: #1d4ed8;
+  }
+  .rank-badge {
+    background: #ecfdf5;
+    color: #065f46;
+    font-weight: 700;
+    min-width: 2rem;
+    text-align: center;
+  }
+  .skeleton {
+    position: relative;
+    overflow: hidden;
+    background: #f3f4f6;
+    border-radius: 0.5rem;
+  }
+  .skeleton::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(
+      90deg,
+      rgba(255, 255, 255, 0) 0%,
+      rgba(255, 255, 255, 0.6) 50%,
+      rgba(255, 255, 255, 0) 100%
+    );
+    animation: shimmer 1.25s infinite;
+  }
+  @keyframes shimmer {
+    100% {
+      transform: translateX(100%);
+    }
+  }
+  .inline-skeleton {
+    display: inline-block;
+    height: 1rem;
+    width: 6rem;
+    border-radius: 0.3rem;
+  }
+</style>
 <div class="container-fluid">
   <div class="row">
-    <!-- Left: leagues -->
+    <!-- Left: player search -->
     <aside class="col-12 col-lg-2 mb-3">
       <div class="card">
-        <div class="card-header fw-semibold">Top leagues</div>
-        <ul class="list-group list-group-flush" id="leagues-list">
-          <li class="list-group-item text-muted">Loading…</li>
+        <div class="card-header fw-semibold">Search players/clubs</div>
+        <div class="p-2">
+          <input
+            type="text"
+            id="player-search"
+            class="form-control form-control-sm"
+            placeholder="Type a name…"
+            autocomplete="off"
+          />
+        </div>
+        <ul class="list-group list-group-flush" id="player-results">
+          <li class="list-group-item text-muted">Start typing to search</li>
         </ul>
       </div>
     </aside>
@@ -21,6 +96,20 @@
           class="form-control form-control-sm"
           style="max-width: 180px"
         />
+        <button
+          id="prev-btn"
+          class="btn btn-sm btn-outline-secondary ms-2"
+          title="Previous day"
+        >
+          <i class="bi bi-chevron-left"></i>
+        </button>
+        <button
+          id="next-btn"
+          class="btn btn-sm btn-outline-secondary ms-1"
+          title="Next day"
+        >
+          <i class="bi bi-chevron-right"></i>
+        </button>
         <button id="go-btn" class="btn btn-sm btn-primary ms-2">Go</button>
         <small id="matches-meta" class="text-muted ms-auto"></small>
       </div>
@@ -32,7 +121,18 @@
       <div class="card">
         <div class="card-header fw-semibold">Top market values</div>
         <ul class="list-group list-group-flush" id="top-market">
-          <li class="list-group-item text-muted">Loading…</li>
+          <li class="list-group-item">
+            <span class="skeleton inline-skeleton"></span>
+          </li>
+          <li class="list-group-item">
+            <span class="skeleton inline-skeleton" style="width: 8rem"></span>
+          </li>
+          <li class="list-group-item">
+            <span class="skeleton inline-skeleton" style="width: 7rem"></span>
+          </li>
+          <li class="list-group-item">
+            <span class="skeleton inline-skeleton" style="width: 9rem"></span>
+          </li>
         </ul>
         <div class="card-footer">
           <small id="market-meta" class="text-muted"></small>
@@ -43,25 +143,18 @@
 </div>
 
 <script>
-  async function fetchJSON(url) {
-    const r = await fetch(url);
+  // Helpers
+  async function fetchJSON(u) {
+    const r = await fetch(u);
     return r.json();
   }
 
-  async function loadLeagues() {
-    const data = await fetchJSON("/api/competitions");
-    const ul = document.getElementById("leagues-list");
-    ul.innerHTML = "";
-    data.rows.forEach((l) => {
-      const id = l.league_id ?? l.competition_id;
-      const name = l.competition_name;
-      const li = document.createElement("li");
-      li.className =
-        "list-group-item d-flex justify-content-between align-items-center";
-      li.innerHTML = `<span>${name}</span>
-      <a class="btn btn-sm btn-outline-secondary" href="/top-scorers?competition_id=${l.league_id}&season=">Open</a>`;
-      ul.appendChild(li);
-    });
+  function debounce(fn, delay = 300) {
+    let t;
+    return (...args) => {
+      clearTimeout(t);
+      t = setTimeout(() => fn(...args), delay);
+    };
   }
 
   function groupBy(xs, key) {
@@ -74,12 +167,22 @@
   async function loadMatches(dateStr) {
     const meta = document.getElementById("matches-meta");
     const cont = document.getElementById("matches-container");
-    cont.innerHTML = "";
+    // Show loading skeleton
+    cont.innerHTML = `
+      <div class="card p-3"><div class="skeleton" style="height: 16px; width: 40%; margin-bottom: .5rem"></div>
+      <div class="skeleton" style="height: 44px; width: 100%; margin-bottom: .5rem"></div>
+      <div class="skeleton" style="height: 44px; width: 100%;"></div></div>`;
     const data = await fetchJSON(
       "/api/matches/by-date?date=" + encodeURIComponent(dateStr)
     );
     meta.textContent = `Date ${data.date} — ${data.rows.length} matches — ${data.ms} ms`;
     const byLeague = groupBy(data.rows, "league_id");
+    // Clear skeleton before rendering actual content
+    cont.innerHTML = "";
+    if (!data.rows || data.rows.length === 0) {
+      cont.innerHTML = `<div class="alert alert-light border">No matches for ${data.date}</div>`;
+      return;
+    }
 
     Object.keys(byLeague)
       .sort()
@@ -92,8 +195,12 @@
         const header = document.createElement("div");
         header.className =
           "card-header d-flex align-items-center border-0 bg-white text-dark fw-semibold";
+        const leagueName =
+          byLeague[league][0] && byLeague[league][0].league_name
+            ? byLeague[league][0].league_name
+            : league;
         header.innerHTML = `
-      <span class="fw-semibold"><i class="bi bi-trophy-fill me-2"></i>${league}</span>
+      <span class="fw-semibold"><i class="bi bi-trophy-fill me-2"></i>${leagueName}</span>
     `;
         card.appendChild(header);
 
@@ -106,23 +213,24 @@
           const hs = m.home_club_goals ?? "-";
           const as = m.away_club_goals ?? "-";
           const status = m.status || "FT";
-          // const homeLogo = m.home_logo_url || '';
-          // const awayLogo = m.away_logo_url || '';
 
-          const row = document.createElement("a");
-          row.href = `/match?game_id=${m.game_id}`;
+          const row = document.createElement("div");
           row.className =
-            "text-decoration-none fixture-row py-2 border-bottom border-light d-flex align-items-center justify-content-between";
+            "fixture-row py-2 border-bottom border-light d-flex align-items-center justify-content-between";
+          row.setAttribute("role", "button");
+          row.addEventListener("click", () => {
+            window.location.href = `/match?game_id=${m.game_id}`;
+          });
           row.innerHTML = `
             <div class="d-flex align-items-center" style="min-width:40%">
               <span class="badge bg-secondary-subtle text-dark me-2">${status}</span>
-              <span class="fw-semibold me-2">${hn}</span>
+              <a class="text-decoration-none fw-semibold me-2" href="/club?club_id=${m.home_club_id}" onclick="event.stopPropagation()">${hn}</a>
             </div>
-            <div class="score-box px-3 py-1 rounded bg-light text-dark fw-bold mx-2" style="min-width:80px; text-align:center">
+            <div class="score-box px-3 py-1 rounded text-dark fw-bold mx-2" style="min-width:80px; text-align:center">
               ${hs} - ${as}
             </div>
             <div class="d-flex align-items-center" style="min-width:40%; justify-content:flex-end">
-              <span class="fw-semibold ms-2">${an}</span>
+              <a class="text-decoration-none fw-semibold ms-2" href="/club?club_id=${m.away_club_id}" onclick="event.stopPropagation()">${an}</a>
             </div>`;
           listWrap.appendChild(row);
         });
@@ -142,7 +250,9 @@
       li.className =
         "list-group-item d-flex justify-content-between align-items-center";
       const val = (p.market_value_eur ?? 0).toLocaleString();
-      li.innerHTML = `<span>${idx + 1}. <a href="/player/profile?player_id=${
+      li.innerHTML = `<span><span class="badge rank-badge me-2">${
+        idx + 1
+      }</span> <a href="/player/profile?player_id=${
         p.player_id
       }" class="text-decoration-none">${
         p.name || "Player " + p.player_id
@@ -153,9 +263,101 @@
     meta.textContent = `Query time: ${data.ms} ms`;
   }
 
-  async function fetchJSON(u) {
-    const r = await fetch(u);
-    return r.json();
+  // Live player search
+  function initPlayerSearch() {
+    const input = document.getElementById("player-search");
+    const list = document.getElementById("player-results");
+    let selIndex = -1; // keyboard selection index across selectable items
+
+    const renderMessage = (msg, cls = "text-muted") => {
+      list.innerHTML = `<li class="list-group-item ${cls}">${msg}</li>`;
+    };
+
+    const doSearch = debounce(async () => {
+      const q = input.value.trim();
+      if (q.length < 2) {
+        renderMessage("Type at least 2 characters");
+        return;
+      }
+      renderMessage("Searching…");
+      try {
+        const [pdata, cdata] = await Promise.all([
+          fetchJSON(`/api/players/search?q=${encodeURIComponent(q)}`),
+          fetchJSON(`/api/clubs/search?q=${encodeURIComponent(q)}`),
+        ]);
+        const players = pdata.rows || [];
+        const clubs = cdata.rows || [];
+        if (!players.length && !clubs.length) {
+          renderMessage("No matches");
+          return;
+        }
+        list.innerHTML = "";
+        selIndex = -1;
+
+        const addHeader = (text) => {
+          const h = document.createElement("li");
+          h.className =
+            "list-group-item text-uppercase small text-muted bg-light";
+          h.textContent = text;
+          h.dataset.header = "1";
+          list.appendChild(h);
+        };
+        const addItem = (label, href) => {
+          const li = document.createElement("li");
+          li.className =
+            "list-group-item d-flex justify-content-between align-items-center selectable";
+          li.innerHTML = `<a class="text-decoration-none" href="${href}">${label}</a>`;
+          li.dataset.href = href;
+          li.addEventListener("mouseenter", () => {
+            [...list.querySelectorAll(".selectable")].forEach((el) =>
+              el.classList.remove("active")
+            );
+            li.classList.add("active");
+            const items = [...list.querySelectorAll(".selectable")];
+            selIndex = items.indexOf(li);
+          });
+          li.addEventListener("click", () => {
+            window.location.href = href;
+          });
+          list.appendChild(li);
+        };
+
+        if (players.length) {
+          addHeader("Players");
+          players.forEach((p) =>
+            addItem(p.name, `/player/profile?player_id=${p.player_id}`)
+          );
+        }
+        if (clubs.length) {
+          addHeader("Clubs");
+          clubs.forEach((c) => addItem(c.name, `/club?club_id=${c.club_id}`));
+        }
+      } catch (e) {
+        renderMessage("Error searching. Try again.", "text-danger");
+      }
+    }, 300);
+
+    input.addEventListener("input", doSearch);
+    input.addEventListener("keydown", (e) => {
+      const items = [...list.querySelectorAll(".selectable")];
+      if (!items.length) return;
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        selIndex = (selIndex + 1) % items.length;
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        selIndex = (selIndex - 1 + items.length) % items.length;
+      } else if (e.key === "Enter") {
+        const target = items[selIndex] || items[0];
+        const href = target?.dataset?.href;
+        if (href) window.location.href = href;
+        return;
+      } else {
+        return; // other keys
+      }
+      items.forEach((el) => el.classList.remove("active"));
+      if (items[selIndex]) items[selIndex].classList.add("active");
+    });
   }
 
   async function initDateAndLoad() {
@@ -188,9 +390,39 @@
     if (v) await loadMatches(v);
   });
 
+  // Date navigation helpers
+  function addDays(dateStr, delta) {
+    const d = new Date(dateStr);
+    d.setDate(d.getDate() + delta);
+    return d.toISOString().slice(0, 10);
+  }
+  let maxMatchDate = null;
+  document.getElementById("prev-btn").addEventListener("click", async () => {
+    const input = document.getElementById("match-date");
+    if (!input.value) return;
+    const prev = addDays(input.value, -1);
+    input.value = prev;
+    await loadMatches(prev);
+  });
+  document.getElementById("next-btn").addEventListener("click", async () => {
+    const input = document.getElementById("match-date");
+    if (!input.value || !maxMatchDate) return;
+    const next = addDays(input.value, 1);
+    if (next > maxMatchDate) return; // cap at max
+    input.value = next;
+    await loadMatches(next);
+  });
+
   // Run initial loads
-  loadLeagues();
+  initPlayerSearch();
   loadTopMarket();
   initDateAndLoad();
+  // keep track of max date for next button
+  (async () => {
+    try {
+      const d = await fetchJSON("/api/matches/max-date");
+      maxMatchDate = d.max_date || null;
+    } catch {}
+  })();
 </script>
 {% endblock %}

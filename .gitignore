@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+env/
+.venv*/
+.env
+*.sqlite3
+.history
+
+# Node/build (if you add a frontend)
+node_modules/
+dist/
+build/
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+
+# DB artifacts
+*.sql.dump
+*.bak
+*.log
+
+# Docker
+*.pid

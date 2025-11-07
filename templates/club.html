@@ -1,0 +1,402 @@
+{% extends "base.html" %} {% block body %}
+<div class="container my-3">
+  <div class="mb-2">
+    <a href="/" class="text-decoration-none">&larr; Back to home</a>
+  </div>
+
+  <!-- Club header -->
+  <div class="card mb-3">
+    <div class="card-body d-flex align-items-center justify-content-between">
+      <div>
+        <div id="club-name" class="h4 mb-1 fw-semibold">Club</div>
+        <div class="text-muted small" id="club-meta"></div>
+      </div>
+      <div class="d-flex align-items-center gap-2">
+        <button
+          id="view-ranking"
+          class="btn btn-sm btn-outline-secondary d-none"
+          type="button"
+          data-bs-toggle="modal"
+          data-bs-target="#clubRankModal"
+        >
+          View ranking
+        </button>
+        <a id="roi-link" class="btn btn-sm btn-outline-primary d-none" href="#"
+          >Transfer ROI</a
+        >
+      </div>
+    </div>
+  </div>
+
+  <div class="row g-3">
+    <!-- Squad -->
+    <div class="col-12 col-lg-6">
+      <div class="card h-100">
+        <div class="card-header fw-semibold">Squad (by market value)</div>
+        <ul id="squad" class="list-group list-group-flush">
+          <li class="list-group-item text-muted">Loading…</li>
+        </ul>
+        <div class="card-footer">
+          <small id="squad-meta" class="text-muted"></small>
+        </div>
+      </div>
+    </div>
+
+    <!-- Recent matches -->
+    <div class="col-12 col-lg-6">
+      <div class="card h-100">
+        <div
+          class="card-header d-flex align-items-center justify-content-between"
+        >
+          <div class="fw-semibold">Recent matches</div>
+          <div class="d-flex align-items-center gap-2">
+            <label for="comp-select" class="small text-muted mb-0"
+              >League</label
+            >
+            <select
+              id="comp-select"
+              class="form-select form-select-sm"
+              style="min-width: 220px"
+            ></select>
+          </div>
+        </div>
+        <ul id="matches" class="list-group list-group-flush">
+          <li class="list-group-item text-muted">Loading…</li>
+        </ul>
+        <div class="card-footer">
+          <small id="matches-meta" class="text-muted"></small>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  function qs(key) {
+    return new URLSearchParams(location.search).get(key);
+  }
+  async function fetchJSON(u) {
+    const r = await fetch(u);
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return r.json();
+  }
+
+  function opponentRow(cId, g) {
+    const isHome = g.home_club_id === cId;
+    const oppId = isHome ? g.away_club_id : g.home_club_id;
+    const oppName = isHome
+      ? g.away_name || g.away_club_id
+      : g.home_name || g.home_club_id;
+    const gf = isHome ? g.home_club_goals : g.away_club_goals;
+    const ga = isHome ? g.away_club_goals : g.home_club_goals;
+    const outcome =
+      gf == null || ga == null ? "-" : gf > ga ? "W" : gf < ga ? "L" : "D";
+
+    const li = document.createElement("li");
+    li.className =
+      "list-group-item d-flex justify-content-between align-items-center";
+    li.innerHTML = `
+      <span class="flex-grow-1 me-2 text-break">
+        <span class="badge text-bg-light border me-2">${g.date_str}</span>
+        <a class="text-decoration-none me-2" href="/match?game_id=${
+          g.game_id
+        }">${g.league_name || g.competition_id}</a>
+        vs <a class="text-decoration-none" href="/club?club_id=${oppId}">${oppName}</a>
+      </span>
+      <span class="d-inline-flex align-items-center gap-2 flex-shrink-0 text-nowrap">
+        <span class="badge text-bg-${
+          outcome === "W" ? "success" : outcome === "L" ? "danger" : "secondary"
+        }">${outcome}</span>
+        <span class="fw-semibold">${g.home_club_goals ?? "-"}–${
+      g.away_club_goals ?? "-"
+    }</span>
+      </span>`;
+    return li;
+  }
+
+  async function loadClub(cid) {
+    const data = await fetchJSON(`/api/club/${cid}/profile`);
+    if (!data.row) {
+      document.getElementById("club-name").textContent = "Club not found";
+      return;
+    }
+    document.getElementById("club-name").textContent =
+      data.row.name || "Club " + cid;
+    // Meta: stadium + seats, average age
+    const metaEl = document.getElementById("club-meta");
+    const parts = [];
+    if (data.row.stadium_name) {
+      const seats =
+        data.row.stadium_seats != null && data.row.stadium_seats !== ""
+          ? ` (${Number(data.row.stadium_seats).toLocaleString()} seats)`
+          : "";
+      parts.push(`${data.row.stadium_name}${seats}`);
+    }
+    if (data.row.average_age != null) {
+      parts.push(`Avg age ${data.row.average_age}`);
+    }
+    if (data.row.total_market_value_eur != null) {
+      const mv = Number(data.row.total_market_value_eur).toLocaleString();
+      const rank =
+        data.row.market_value_rank != null && data.row.clubs_ranked != null
+          ? ` — Rank #${data.row.market_value_rank} of ${data.row.clubs_ranked}`
+          : "";
+      parts.push(`Market value €${mv}${rank}`);
+      document.getElementById("view-ranking").classList.remove("d-none");
+    }
+    metaEl.textContent = parts.join(" • ");
+    // Link to ROI page prefilled with this club (season must be selected there)
+    const roi = document.getElementById("roi-link");
+    roi.href = `/club/roi?club_id=${encodeURIComponent(cid)}`;
+    roi.classList.remove("d-none");
+  }
+
+  async function loadSquad(cid) {
+    const ul = document.getElementById("squad");
+    const meta = document.getElementById("squad-meta");
+    try {
+      const data = await fetchJSON(`/api/club/${cid}/players`);
+      ul.innerHTML = "";
+      if (!data.rows || !data.rows.length) {
+        ul.innerHTML =
+          '<li class="list-group-item text-muted">No current players recorded</li>';
+        meta.textContent = "";
+        return;
+      }
+      data.rows.forEach((p, idx) => {
+        const li = document.createElement("li");
+        li.className =
+          "list-group-item d-flex justify-content-between align-items-center";
+        const val = (p.market_value_eur ?? 0).toLocaleString();
+        li.innerHTML = `
+          <span>
+            <span class="badge bg-secondary-subtle text-dark me-2">${
+              idx + 1
+            }</span>
+            <a class="text-decoration-none" href="/player/profile?player_id=${
+              p.player_id
+            }">${p.name}</a>
+            <small class="text-muted ms-2">${p.position || ""}${
+          p.sub_position ? " • " + p.sub_position : ""
+        }</small>
+          </span>
+          <span class="badge text-bg-success">€${val}</span>`;
+        ul.appendChild(li);
+      });
+      meta.textContent = `Count ${data.rows.length} — ${data.ms} ms`;
+    } catch (e) {
+      ul.innerHTML =
+        '<li class="list-group-item text-danger">Failed to load squad</li>';
+      meta.textContent = "";
+    }
+  }
+
+  async function loadMatches(cid, competitionId) {
+    const ul = document.getElementById("matches");
+    const meta = document.getElementById("matches-meta");
+    try {
+      const qs = new URLSearchParams({ limit: "12" });
+      if (competitionId) qs.set("competition_id", competitionId);
+      const data = await fetchJSON(`/api/club/${cid}/matches?${qs.toString()}`);
+      ul.innerHTML = "";
+      if (!data.rows || !data.rows.length) {
+        ul.innerHTML =
+          '<li class="list-group-item text-muted">No matches found</li>';
+        meta.textContent = "";
+        return;
+      }
+      data.rows.forEach((g) => ul.appendChild(opponentRow(Number(cid), g)));
+      meta.textContent = `Count ${data.rows.length} — ${data.ms} ms`;
+    } catch (e) {
+      ul.innerHTML =
+        '<li class="list-group-item text-danger">Failed to load matches</li>';
+      meta.textContent = "";
+    }
+  }
+
+  async function loadCompetitions(cid) {
+    const sel = document.getElementById("comp-select");
+    sel.innerHTML = `<option value="">Loading…</option>`;
+    try {
+      const data = await fetchJSON(`/api/club/${cid}/competitions`);
+      const rows = data.rows || [];
+      sel.innerHTML = "";
+      if (!rows.length) {
+        sel.innerHTML = `<option value="">All</option>`;
+        sel.disabled = true;
+        return null;
+      }
+      // Build options
+      rows.forEach((r) => {
+        const opt = document.createElement("option");
+        opt.value = r.competition_id;
+        opt.textContent = r.competition_name || r.competition_id;
+        opt.dataset.type = r.type || "";
+        sel.appendChild(opt);
+      });
+      // Prefer domestic-league by type
+      const opts = [...sel.options];
+      const preferred =
+        opts.find((o) => {
+          const t = (o.dataset.type || "").toLowerCase();
+          return t === "domestic-league" || t === "domestic_league";
+        }) || opts[0];
+      if (preferred) preferred.selected = true;
+      return preferred ? preferred.value : null;
+    } catch (e) {
+      sel.innerHTML = `<option value="">All</option>`;
+      sel.disabled = true;
+      return null;
+    }
+  }
+
+  (async function init() {
+    const cid = qs("club_id");
+    if (!cid) {
+      alert("Missing club_id");
+      return;
+    }
+    await loadClub(cid);
+    await loadSquad(cid);
+    const defaultComp = await loadCompetitions(cid);
+    await loadMatches(cid, defaultComp || undefined);
+    // stash default competition for ranking modal default
+    const vr = document.getElementById("view-ranking");
+    if (vr) vr.dataset.defaultComp = defaultComp || "";
+    document.getElementById("comp-select").addEventListener("change", (e) => {
+      const v = e.target.value || undefined;
+      loadMatches(cid, v);
+    });
+  })();
+</script>
+
+<!-- Clubs market ranking modal -->
+<div class="modal fade" id="clubRankModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header align-items-center">
+        <h5 class="modal-title me-3">Clubs by total market value</h5>
+        <div class="ms-auto d-flex align-items-center gap-2">
+          <label for="rank-league" class="small text-muted mb-0"
+            >Domestic league</label
+          >
+          <select
+            id="rank-league"
+            class="form-select form-select-sm"
+            style="min-width: 240px"
+          ></select>
+        </div>
+        <button
+          type="button"
+          class="btn-close ms-2"
+          data-bs-dismiss="modal"
+          aria-label="Close"
+        ></button>
+      </div>
+      <div class="modal-body">
+        <div class="table-responsive">
+          <table class="table table-sm align-middle">
+            <thead>
+              <tr>
+                <th style="width: 60px">#</th>
+                <th>Club</th>
+                <th class="text-end">Total (€)</th>
+              </tr>
+            </thead>
+            <tbody id="club-rank-body">
+              <tr>
+                <td colspan="3" class="text-muted">Loading…</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <small id="club-rank-meta" class="text-muted"></small>
+      </div>
+    </div>
+  </div>
+  <script>
+    async function loadClubRanking(selectedId, competitionId) {
+      const body = document.getElementById("club-rank-body");
+      const meta = document.getElementById("club-rank-meta");
+      body.innerHTML = `<tr><td colspan="3" class="text-muted">Loading…</td></tr>`;
+      try {
+        const qs = new URLSearchParams({ limit: "200" });
+        if (competitionId) qs.set("competition_id", competitionId);
+        const data = await fetchJSON(
+          "/api/clubs/market-ranking?" + qs.toString()
+        );
+        const rows = data.rows || [];
+        body.innerHTML = "";
+        rows.forEach((r) => {
+          const tr = document.createElement("tr");
+          if (String(r.club_id) === String(selectedId))
+            tr.classList.add("table-primary");
+          tr.innerHTML = `
+            <td><span class="badge bg-secondary-subtle text-dark">${
+              r.market_value_rank
+            }</span></td>
+            <td><a class="text-decoration-none" href="/club?club_id=${
+              r.club_id
+            }">${r.name || r.club_id}</a></td>
+            <td class="text-end">€${Number(
+              r.total_market_value_eur || 0
+            ).toLocaleString()}</td>`;
+          body.appendChild(tr);
+        });
+        meta.textContent = `Showing ${rows.length} clubs`;
+      } catch (e) {
+        body.innerHTML = `<tr><td colspan="3" class="text-danger">Failed to load ranking</td></tr>`;
+        meta.textContent = "";
+      }
+    }
+    async function loadDomesticLeaguesForRanking(clubId, defaultComp) {
+      const sel = document.getElementById("rank-league");
+      if (!sel) return null;
+      sel.innerHTML = `<option value="">All domestic leagues</option>`;
+      try {
+        // Limit to this club's own domestic league(s) only
+        const data = await fetchJSON(
+          `/api/club/${encodeURIComponent(clubId)}/competitions`
+        );
+        const leagues = (data.rows || []).filter((r) => {
+          const t = (r.type || "").toLowerCase();
+          return t === "domestic-league" || t === "domestic_league";
+        });
+        leagues.forEach((l) => {
+          const opt = document.createElement("option");
+          opt.value = l.competition_id;
+          opt.textContent = l.competition_name || l.competition_id;
+          sel.appendChild(opt);
+        });
+        if (
+          defaultComp &&
+          [...sel.options].some((o) => o.value === String(defaultComp))
+        ) {
+          sel.value = String(defaultComp);
+        }
+        return sel.value || "";
+      } catch (e) {
+        return "";
+      }
+    }
+
+    document
+      .getElementById("view-ranking")
+      ?.addEventListener("click", async () => {
+        const cid = qs("club_id");
+        const defaultComp =
+          document.getElementById("view-ranking")?.dataset?.defaultComp || "";
+        await loadDomesticLeaguesForRanking(cid, defaultComp);
+        const compSel = document.getElementById("rank-league");
+        const compId = compSel ? compSel.value || undefined : undefined;
+        if (cid) loadClubRanking(cid, compId);
+        if (compSel) {
+          compSel.onchange = () => {
+            const chosen = compSel.value || undefined;
+            if (cid) loadClubRanking(cid, chosen);
+          };
+        }
+      });
+  </script>
+</div>
+{% endblock %}

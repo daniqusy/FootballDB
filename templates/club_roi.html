@@ -115,6 +115,9 @@
       opt.textContent = r.season;
       seasonSel.appendChild(opt);
     });
+    // Default season to 24/25 if available (unless URL later overrides)
+    const preferred = [...seasonSel.options].find((o) => o.value === "24/25");
+    if (preferred) preferred.selected = true;
   }
 
   async function runROI() {
@@ -161,12 +164,16 @@
     const cid = url.searchParams.get("club_id");
     const seas = url.searchParams.get("season");
     if (cid) {
-      // fetch name for display
-      const info = await (
-        await fetch("/api/clubs/search?q=" + encodeURIComponent(cid))
-      ).json();
-      clubIdEl.value = cid;
-      if (info.rows.length) clubName.value = info.rows[0].name;
+      // fetch name by id for display
+      try {
+        const info = await (
+          await fetch(`/api/club/${encodeURIComponent(cid)}/profile`)
+        ).json();
+        clubIdEl.value = cid;
+        if (info && info.row && info.row.name) {
+          clubName.value = info.row.name;
+        }
+      } catch {}
       await loadSeasons(cid);
     }
     if (seas) seasonSel.value = seas;

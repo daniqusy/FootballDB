@@ -93,6 +93,7 @@ def api_match():
     SELECT
       g.game_id,
       g.competition_id,
+      c.name AS competition_name,
       g.season,
       g.round,
       DATE_FORMAT(g.date, '%%Y-%%m-%%d') AS date_str,
@@ -114,6 +115,7 @@ def api_match():
     FROM game g
     JOIN club hc ON hc.club_id = g.home_club_id
     JOIN club ac ON ac.club_id = g.away_club_id
+    JOIN competition c ON c.competition_id = g.competition_id
     WHERE g.game_id = %s
 
     """
@@ -144,6 +146,154 @@ def api_match():
     """
     events, ms2 = run_sql(sql_ev, (gid,))
     return jsonify(dict(game=(game[0] if game else None), events=events))
+
+# Club page
+@app.route("/club")
+def club_page():
+    return render_template("club.html")
+
+# Club profile
+@app.get("/api/club/<int:cid>/profile")
+def api_club_profile(cid):
+    sql = """
+      WITH club_totals AS (
+        SELECT c.club_id,
+               c.name,
+               c.average_age,
+               c.stadium_name,
+               c.stadium_seats,
+               COALESCE(SUM(p.market_value_eur), 0) AS total_market_value_eur
+        FROM club c
+        LEFT JOIN player p
+          ON p.current_club_id = c.club_id
+         AND p.market_value_eur IS NOT NULL
+        GROUP BY c.club_id, c.name, c.average_age, c.stadium_name, c.stadium_seats
+      )
+      SELECT ct.club_id,
+             ct.name,
+             ct.average_age,
+             ct.stadium_name,
+             ct.stadium_seats,
+             ct.total_market_value_eur,
+             DENSE_RANK() OVER (ORDER BY ct.total_market_value_eur DESC) AS market_value_rank,
+             COUNT(*) OVER () AS clubs_ranked
+      FROM club_totals ct
+      WHERE ct.club_id=%s
+    """
+    rows, ms = run_sql(sql, (cid,))
+    return jsonify(dict(ms=ms, row=(rows[0] if rows else None)))
+
+# Club players (current squad by market value)
+@app.get("/api/club/<int:cid>/players")
+def api_club_players(cid):
+    sql = """
+      SELECT p.player_id, p.name, p.position, p.sub_position,
+             p.market_value_eur, pb.image_url
+      FROM player p
+      LEFT JOIN player_bio pb ON pb.player_id = p.player_id
+      WHERE p.current_club_id=%s
+      ORDER BY p.market_value_eur DESC
+      LIMIT 200
+    """
+    rows, ms = run_sql(sql, (cid,))
+    return jsonify(dict(ms=ms, rows=rows))
+
+# Club recent matches
+@app.get("/api/club/<int:cid>/matches")
+def api_club_matches(cid):
+    limit_n = min(max(int(request.args.get("limit", 12)), 1), 100)
+    comp = request.args.get("competition_id")
+    base = """
+      SELECT g.game_id,
+             DATE_FORMAT(g.date, '%%Y-%%m-%%d') AS date_str,
+             g.home_club_id, hc.name AS home_name,
+             g.away_club_id, ac.name AS away_name,
+             g.home_club_goals, g.away_club_goals,
+             g.competition_id, c.name AS league_name
+      FROM game g
+      JOIN club hc ON hc.club_id = g.home_club_id
+      JOIN club ac ON ac.club_id = g.away_club_id
+      JOIN competition c ON c.competition_id = g.competition_id
+      WHERE (g.home_club_id=%s OR g.away_club_id=%s)
+    """
+    params = [cid, cid]
+    if comp:
+      base += " AND g.competition_id=%s"
+      params.append(comp)
+    base += " ORDER BY g.date DESC LIMIT %s"
+    params.append(limit_n)
+    rows, ms = run_sql(base, tuple(params))
+    return jsonify(dict(ms=ms, rows=rows))
+
+# Club competitions for dropdown (with type)
+@app.get("/api/club/<int:cid>/competitions")
+def api_club_competitions(cid):
+    sql = """
+      SELECT DISTINCT g.competition_id, c.name AS competition_name, c.type
+      FROM game g
+      JOIN competition c ON c.competition_id = g.competition_id
+      WHERE g.home_club_id=%s OR g.away_club_id=%s
+      ORDER BY c.name
+    """
+    rows, ms = run_sql(sql, (cid, cid))
+    return jsonify(dict(ms=ms, rows=rows))
+
+# Clubs total market value ranking
+@app.get("/api/clubs/market-ranking")
+def api_clubs_market_ranking():
+    limit_n = min(max(int(request.args.get("limit", 100)), 1), 500)
+    comp = request.args.get("competition_id")
+    if comp:
+        sql = """
+          WITH club_totals AS (
+            SELECT c.club_id,
+                   c.name,
+                   COALESCE(SUM(p.market_value_eur), 0) AS total_market_value_eur
+            FROM club c
+            LEFT JOIN player p
+              ON p.current_club_id = c.club_id
+             AND p.market_value_eur IS NOT NULL
+            GROUP BY c.club_id, c.name
+          ),
+          club_in_league AS (
+            SELECT DISTINCT g.home_club_id AS club_id
+            FROM game g WHERE g.competition_id=%s
+            UNION
+            SELECT DISTINCT g.away_club_id AS club_id
+            FROM game g WHERE g.competition_id=%s
+          )
+          SELECT ct.club_id,
+                 ct.name,
+                 ct.total_market_value_eur,
+                 DENSE_RANK() OVER (ORDER BY ct.total_market_value_eur DESC) AS market_value_rank
+          FROM club_totals ct
+          JOIN club_in_league l ON l.club_id = ct.club_id
+          ORDER BY ct.total_market_value_eur DESC
+          LIMIT %s
+        """
+        rows, ms = run_sql(sql, (comp, comp, limit_n))
+    else:
+        sql = """
+          WITH club_totals AS (
+            SELECT c.club_id,
+                   c.name,
+                   COALESCE(SUM(p.market_value_eur), 0) AS total_market_value_eur
+            FROM club c
+            LEFT JOIN player p
+              ON p.current_club_id = c.club_id
+             AND p.market_value_eur IS NOT NULL
+            GROUP BY c.club_id, c.name
+          )
+          SELECT club_id,
+                 name,
+                 total_market_value_eur,
+                 DENSE_RANK() OVER (ORDER BY total_market_value_eur DESC) AS market_value_rank
+          FROM club_totals
+          ORDER BY total_market_value_eur DESC
+          LIMIT %s
+        """
+        rows, ms = run_sql(sql, (limit_n,))
+    return jsonify(dict(ms=ms, rows=rows))
 
 # Club transfer ROI view
 @app.route("/club/roi")
@@ -197,7 +347,7 @@ def api_club_roi():
              post_minutes, post_goals, post_assists,
              eur_per_minutes, eur_per_contrib
       FROM view_club_transfer_roi
-      WHERE club_id=%s AND transfer_season=%s
+      WHERE club_id=%s AND transfer_season=%s AND transfer_fee IS NOT NULL AND transfer_fee > 0
       ORDER BY {sort_by} {order}
       LIMIT 200
     """
@@ -215,7 +365,7 @@ def api_club_roi():
 @app.get("/api/competitions")
 def api_competitions():
     sql = """
-      SELECT DISTINCT c.competition_id, c.name AS competition_name
+      SELECT DISTINCT c.competition_id, c.name AS competition_name, c.type
       FROM competition c
       ORDER BY c.name
     """
@@ -232,10 +382,12 @@ def api_matches_by_date():
         g.game_id,
         g.home_club_id,  hc.name         AS home_name,
         g.away_club_id,  ac.name         AS away_name,
-        g.home_club_goals, g.away_club_goals
+        g.home_club_goals, g.away_club_goals,
+        c.name                            AS league_name
       FROM game g
       JOIN club hc ON hc.club_id = g.home_club_id
       JOIN club ac ON ac.club_id = g.away_club_id
+      JOIN competition c ON c.competition_id = g.competition_id
       WHERE g.date = %s
       ORDER BY g.competition_id, g.game_id
     """
@@ -283,7 +435,7 @@ def api_players_search():
 @app.get("/api/players/<int:pid>/competitions")
 def api_player_competitions(pid):
     sql = """
-      SELECT DISTINCT g.competition_id, c.name AS competition_name
+      SELECT DISTINCT g.competition_id, c.name AS competition_name, c.type AS competition_type
       FROM appearance a
       JOIN game g ON g.game_id = a.game_id
       JOIN competition c ON c.competition_id = g.competition_id
@@ -381,6 +533,67 @@ def api_player_career(pid):
     """
     rows, ms = run_sql(sql, (pid,))
     return jsonify(dict(ms=ms, rows=rows))
+
+# Market value comparison by category
+@app.get("/api/market-compare")
+def api_market_compare():
+  category = (request.args.get("category") or "").strip().lower()
+  value = request.args.get("value")
+  limit_n = min(max(int(request.args.get("limit", 100)), 1), 200)
+
+  allowed = {"age", "citizenship", "club", "position", "agent", "city"}
+  if category not in allowed or value is None or value == "":
+    return jsonify(dict(ms=0, rows=[], error="invalid-params")), 400
+
+  # Build SQL according to category
+  base_select = """
+    SELECT p.player_id, p.name, p.market_value_eur
+    FROM player p
+    JOIN player_bio pb ON pb.player_id = p.player_id
+  """
+  where = []
+  params = []
+
+  if category == "age":
+    # Expect integer age
+    try:
+      age_val = int(value)
+    except ValueError:
+      return jsonify(dict(ms=0, rows=[], error="invalid-age")), 400
+    where.append("pb.dob IS NOT NULL AND TIMESTAMPDIFF(YEAR, pb.dob, CURDATE()) = %s")
+    params.append(age_val)
+  elif category == "citizenship":
+    where.append("pb.country_of_citizenship = %s")
+    params.append(value)
+  elif category == "club":
+    # Expect current club id integer
+    try:
+      club_id = int(value)
+    except ValueError:
+      return jsonify(dict(ms=0, rows=[], error="invalid-club")), 400
+    where.append("p.current_club_id = %s")
+    params.append(club_id)
+  elif category == "position":
+    where.append("p.position = %s")
+    params.append(value)
+  elif category == "agent":
+    where.append("pb.agent_name = %s")
+    params.append(value)
+  elif category == "city":
+    where.append("pb.city_of_birth = %s")
+    params.append(value)
+
+  where.append("p.market_value_eur IS NOT NULL")
+  sql = f"""
+    {base_select}
+    WHERE {' AND '.join(where)}
+    ORDER BY p.market_value_eur DESC
+    LIMIT %s
+  """
+  params.append(limit_n)
+
+  rows, ms = run_sql(sql, tuple(params))
+  return jsonify(dict(ms=ms, rows=rows, category=category, value=value, limit=limit_n))
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "8000")), debug=True)
