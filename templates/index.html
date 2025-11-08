@@ -64,6 +64,42 @@
     width: 6rem;
     border-radius: 0.3rem;
   }
+  /* Meta badges */
+  .meta-line {
+    font-size: 0.875rem;
+    color: #6b7280;
+  }
+  .meta-badge {
+    display: inline-block;
+    padding: 0.15rem 0.45rem;
+    border-radius: 0.5rem;
+    border: 1px solid #e5e7eb;
+    background: #f9fafb;
+    color: #111827;
+  }
+  .meta-badge.faster {
+    background: #ecfdf5;
+    border-color: #d1fae5;
+    color: #065f46;
+  }
+  .meta-badge.slower {
+    background: #fef2f2;
+    border-color: #fee2e2;
+    color: #991b1b;
+  }
+  .meta-sep {
+    color: #9ca3af;
+    padding: 0 0.25rem;
+  }
+  .meta-diff {
+    color: #b91c1c;
+    font-weight: 600;
+    margin-left: 0.25rem;
+  }
+  .meta-badges {
+    display: block;
+    margin-top: 0.125rem;
+  }
 </style>
 <div class="container-fluid">
   <div class="row">
@@ -88,8 +124,12 @@
 
     <!-- Center: matches feed by date -->
     <main class="col-12 col-lg-7 mb-3">
-      <div class="d-flex align-items-center mb-2">
-        <h2 class="h5 mb-0 me-3">Matches</h2>
+      <h2 class="h5 mb-2">Matches</h2>
+      <!-- Row 1: date selection + navigation + go -->
+      <div
+        class="d-flex align-items-center flex-wrap gap-2 mb-1"
+        id="matches-row-1"
+      >
         <input
           type="date"
           id="match-date"
@@ -98,20 +138,52 @@
         />
         <button
           id="prev-btn"
-          class="btn btn-sm btn-outline-secondary ms-2"
+          class="btn btn-sm btn-outline-secondary"
           title="Previous day"
         >
           <i class="bi bi-chevron-left"></i>
         </button>
         <button
           id="next-btn"
-          class="btn btn-sm btn-outline-secondary ms-1"
+          class="btn btn-sm btn-outline-secondary"
           title="Next day"
         >
           <i class="bi bi-chevron-right"></i>
         </button>
-        <button id="go-btn" class="btn btn-sm btn-primary ms-2">Go</button>
-        <small id="matches-meta" class="text-muted ms-auto"></small>
+        <button id="go-btn" class="btn btn-sm btn-primary">Go</button>
+      </div>
+      <!-- Row 2: data source / compare / timings & counts -->
+      <div
+        class="d-flex align-items-start flex-wrap gap-3 mb-2"
+        id="matches-row-2"
+      >
+        <div class="d-flex align-items-center small" style="gap: 0.35rem">
+          <label class="text-muted">Data source:</label>
+          <select
+            id="data-source"
+            class="form-select form-select-sm"
+            style="width: auto"
+          >
+            <option value="sql">SQL</option>
+            <option value="mongo">Mongo</option>
+          </select>
+          <span
+            style="cursor: help"
+            title="Choose backend data source. Mongo populated via ETL."
+            >ℹ️</span
+          >
+        </div>
+        <div
+          class="form-check form-switch d-none"
+          id="compare-wrap"
+          title="Fetch both sources and compare results"
+        >
+          <input class="form-check-input" type="checkbox" id="compare-toggle" />
+          <label class="form-check-label small" for="compare-toggle"
+            >Compare</label
+          >
+        </div>
+        <small id="matches-meta" class="meta-line"></small>
       </div>
       <div id="matches-container" class="vstack gap-3"></div>
     </main>
@@ -164,6 +236,52 @@
     }, {});
   }
 
+  function persistSource(val) {
+    try {
+      localStorage.setItem("match_source", val);
+    } catch {}
+  }
+  function loadPersistedSource() {
+    try {
+      return localStorage.getItem("match_source") || "sql";
+    } catch {
+      return "sql";
+    }
+  }
+
+  async function fetchMatches(source, dateStr) {
+    const endpoint =
+      source === "mongo"
+        ? "/api/mongo/matches/by-date"
+        : "/api/matches/by-date";
+    const r = await fetch(endpoint + "?date=" + encodeURIComponent(dateStr));
+    return r.json();
+  }
+
+  function coreComparable(row) {
+    return {
+      game_id: row.game_id,
+      home_club_id: row.home_club_id,
+      away_club_id: row.away_club_id,
+      home_club_goals: row.home_club_goals,
+      away_club_goals: row.away_club_goals,
+    };
+  }
+
+  function diffRows(sqlRows, mongoRows) {
+    if (sqlRows.length !== mongoRows.length) return true;
+    const map = new Map(mongoRows.map((r) => [r.game_id, coreComparable(r)]));
+    for (const r of sqlRows) {
+      const m = map.get(r.game_id);
+      if (!m) return true;
+      const c = coreComparable(r);
+      for (const k of Object.keys(c)) {
+        if (c[k] !== m[k]) return true;
+      }
+    }
+    return false;
+  }
+
   async function loadMatches(dateStr) {
     const meta = document.getElementById("matches-meta");
     const cont = document.getElementById("matches-container");
@@ -172,10 +290,49 @@
       <div class="card p-3"><div class="skeleton" style="height: 16px; width: 40%; margin-bottom: .5rem"></div>
       <div class="skeleton" style="height: 44px; width: 100%; margin-bottom: .5rem"></div>
       <div class="skeleton" style="height: 44px; width: 100%;"></div></div>`;
-    const data = await fetchJSON(
-      "/api/matches/by-date?date=" + encodeURIComponent(dateStr)
-    );
-    meta.textContent = `Date ${data.date} — ${data.rows.length} matches — ${data.ms} ms`;
+    const sourceSel = document.getElementById("data-source");
+    const compare = document.getElementById("compare-toggle").checked;
+    const source = sourceSel.value;
+    let data = await fetchMatches(source, dateStr);
+    let compareData = null;
+    let hasDiff = false;
+    if (compare) {
+      const otherSource = source === "sql" ? "mongo" : "sql";
+      compareData = await fetchMatches(otherSource, dateStr);
+      hasDiff = diffRows(
+        source === "sql" ? data.rows : compareData.rows,
+        source === "sql" ? compareData.rows : data.rows
+      );
+    }
+    const srcLabel = source.toUpperCase();
+    if (compare) {
+      const otherLabel = source === "sql" ? "Mongo" : "SQL";
+      const diffPill = hasDiff ? '<span class="meta-diff">diff</span>' : "";
+      const aFaster = Number(data.ms) < Number(compareData.ms);
+      const bFaster = Number(compareData.ms) < Number(data.ms);
+      const aClass = aFaster ? "faster" : bFaster ? "slower" : "";
+      const bClass = bFaster ? "faster" : aFaster ? "slower" : "";
+      meta.innerHTML = `
+        <span>${dateStr}</span>
+        <span class="meta-sep">—</span>
+        <span>${data.rows.length} matches</span>
+        <span class="meta-badges">
+          <span class="meta-badge ${aClass}">${srcLabel} ${data.ms} ms</span>
+          <span class="meta-sep">|</span>
+          <span class="meta-badge ${bClass}">${otherLabel} ${compareData.ms} ms</span>
+          ${diffPill}
+        </span>
+      `;
+    } else {
+      meta.innerHTML = `
+        <span>${dateStr}</span>
+        <span class="meta-sep">—</span>
+        <span>${data.rows.length} matches</span>
+        <span class="meta-badges">
+          <span class="meta-badge">${srcLabel} ${data.ms} ms</span>
+        </span>
+      `;
+    }
     const byLeague = groupBy(data.rows, "league_id");
     // Clear skeleton before rendering actual content
     cont.innerHTML = "";
@@ -360,10 +517,20 @@
     });
   }
 
+  async function fetchMaxDate(source) {
+    const endpoint =
+      source === "mongo"
+        ? "/api/mongo/matches/max-date"
+        : "/api/matches/max-date";
+    const r = await fetch(endpoint);
+    return r.json();
+  }
+
   async function initDateAndLoad() {
     const input = document.getElementById("match-date");
     try {
-      const d = await fetchJSON("/api/matches/max-date");
+      const sourceSel = document.getElementById("data-source");
+      const d = await fetchMaxDate(sourceSel.value);
       const max = d.max_date; // 'YYYY-MM-DD' or null
       if (max) {
         input.max = max;
@@ -413,14 +580,48 @@
     await loadMatches(next);
   });
 
+  // Source change handler
+  document
+    .getElementById("data-source")
+    .addEventListener("change", async () => {
+      const sel = document.getElementById("data-source").value;
+      persistSource(sel);
+      // refresh max date for new source
+      try {
+        const d = await fetchMaxDate(sel);
+        maxMatchDate = d.max_date || null;
+        const input = document.getElementById("match-date");
+        if (maxMatchDate && (!input.value || input.value > maxMatchDate)) {
+          input.value = maxMatchDate;
+        }
+      } catch {}
+      if (document.getElementById("match-date").value) {
+        await loadMatches(document.getElementById("match-date").value);
+      }
+    });
+
+  // Compare toggle rerun
+  document
+    .getElementById("compare-toggle")
+    .addEventListener("change", async () => {
+      const v = document.getElementById("match-date").value;
+      if (v) await loadMatches(v);
+    });
+
   // Run initial loads
   initPlayerSearch();
   loadTopMarket();
+  // Initialize source from persistence
+  const persisted = loadPersistedSource();
+  document.getElementById("data-source").value = persisted;
+  // Expose compare toggle (dev/testing) – remove d-none class
+  document.getElementById("compare-wrap").classList.remove("d-none");
   initDateAndLoad();
   // keep track of max date for next button
   (async () => {
     try {
-      const d = await fetchJSON("/api/matches/max-date");
+      const sourceSel = document.getElementById("data-source");
+      const d = await fetchMaxDate(sourceSel.value);
       maxMatchDate = d.max_date || null;
     } catch {}
   })();

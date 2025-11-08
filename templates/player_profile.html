@@ -75,6 +75,30 @@
   @media (max-width: 768px) {
     .filters .form-select { min-width: 120px; }
   }
+
+  /* Meta badges (match timings + compare) */
+  .meta-badge {
+    display: inline-block;
+    padding: 0.15rem 0.45rem;
+    border-radius: 0.5rem;
+    border: 1px solid #e5e7eb;
+    background: #f9fafb;
+    color: #111827;
+    font-size: 0.875rem;
+  }
+  .meta-badge.faster {
+    background: #ecfdf5;
+    border-color: #d1fae5;
+    color: #065f46;
+  }
+  .meta-badge.slower {
+    background: #fef2f2;
+    border-color: #fee2e2;
+    color: #991b1b;
+  }
+  .meta-sep { color: #9ca3af; padding: 0 0.25rem; }
+  .meta-diff { color: #b91c1c; font-weight: 600; margin-left: 0.25rem; }
+  .meta-badges { display: block; margin-top: 0.15rem; }
 </style>
 
 <div class="container py-3">
@@ -196,11 +220,26 @@
   </div>
 
   <!-- Filters -->
-  <div class="d-flex align-items-center gap-2 mb-2 filters">
-    <span class="filter-label">Competition</span>
-    <select id="pp-comp" class="form-select"></select>
-    <span class="filter-label">Season</span>
-    <select id="pp-season" class="form-select"></select>
+  <div class="d-flex flex-wrap align-items-center gap-2 mb-2 filters">
+    <div class="d-flex align-items-center gap-2">
+      <span class="filter-label">Competition</span>
+      <select id="pp-comp" class="form-select"></select>
+    </div>
+    <div class="d-flex align-items-center gap-2">
+      <span class="filter-label">Season</span>
+      <select id="pp-season" class="form-select"></select>
+    </div>
+    <div class="d-flex align-items-center gap-2">
+      <span class="filter-label">Source</span>
+      <select id="pp-source" class="form-select form-select-sm" style="min-width:110px">
+        <option value="sql">SQL</option>
+        <option value="mongo">Mongo</option>
+      </select>
+    </div>
+    <div class="form-check form-switch d-none" id="pp-compare-wrap" title="Compare SQL vs Mongo">
+      <input class="form-check-input" type="checkbox" id="pp-compare" />
+      <label class="form-check-label small" for="pp-compare">Compare</label>
+    </div>
     <button id="pp-refresh" class="btn btn-primary btn-sm">Refresh</button>
     <small id="pp-meta" class="subtle ms-auto"></small>
   </div>
@@ -456,10 +495,47 @@
     const prof = await J(`/api/player/${pid}/profile`);
     const playerClubName = prof.row?.current_club_name || "";
     const tb = document.getElementById("pp-matches");
-    const res = await J(
-      `/api/player/${pid}/matches?competition_id=${cid}&season=${sea}`
-    );
-    document.getElementById("pp-meta").textContent = `Query time: ${res.ms} ms`;
+    const sourceSel = document.getElementById("pp-source").value;
+    const compare = document.getElementById("pp-compare").checked;
+    const baseUrl = sourceSel === 'mongo' ? '/api/mongo/player' : '/api/player';
+    const res = await J(`${baseUrl}/${pid}/matches?competition_id=${cid}&season=${sea}`);
+    let compareRes = null;
+    let hasDiff = false;
+    if (compare) {
+      const otherBase = sourceSel === 'sql' ? '/api/mongo/player' : '/api/player';
+      compareRes = await J(`${otherBase}/${pid}/matches?competition_id=${cid}&season=${sea}`);
+      hasDiff = diffPlayerRows(
+        sourceSel === 'sql' ? res.rows : compareRes.rows,
+        sourceSel === 'sql' ? compareRes.rows : res.rows
+      );
+    }
+    const metaEl = document.getElementById("pp-meta");
+    if (compare && compareRes) {
+      const aLabel = sourceSel.toUpperCase();
+      const bLabel = sourceSel === 'sql' ? 'Mongo' : 'SQL';
+      const aMs = res.ms;
+      const bMs = compareRes.ms;
+      const aFaster = Number(aMs) < Number(bMs);
+      const bFaster = Number(bMs) < Number(aMs);
+      const aClass = aFaster ? 'faster' : (bFaster ? 'slower' : '');
+      const bClass = bFaster ? 'faster' : (aFaster ? 'slower' : '');
+      metaEl.innerHTML = `
+        <span>${res.rows.length} matches</span>
+        <span class="meta-badges" style="display:block;margin-top:.15rem;">
+          <span class="meta-badge ${aClass}">${aLabel} ${aMs} ms</span>
+          <span class="meta-sep">|</span>
+          <span class="meta-badge ${bClass}">${bLabel} ${bMs} ms</span>
+          ${hasDiff ? '<span class="meta-diff">diff</span>' : ''}
+        </span>
+      `;
+    } else {
+      metaEl.innerHTML = `
+        <span>${res.rows.length} matches</span>
+        <span class="meta-badges" style="display:block;margin-top:.15rem;">
+          <span class="meta-badge">${sourceSel.toUpperCase()} ${res.ms} ms</span>
+        </span>
+      `;
+    }
     tb.innerHTML = "";
     let g = 0,
       a = 0,
@@ -592,7 +668,34 @@
     await loadSeasonSummary();
     await loadMatches();
     await loadCareer();
+    // expose compare toggle
+    document.getElementById('pp-compare-wrap').classList.remove('d-none');
+    document.getElementById('pp-compare').addEventListener('change', loadMatches);
+    document.getElementById('pp-source').addEventListener('change', loadMatches);
   })();
+
+  // diff helper for player matches
+  function corePlayer(r){
+    return {
+      date_str: r.date_str,
+      minutes_played: r.minutes_played,
+      goals: r.goals,
+      assists: r.assists,
+      home_club_goals: r.home_club_goals,
+      away_club_goals: r.away_club_goals
+    };
+  }
+  function diffPlayerRows(a,b){
+    if (a.length !== b.length) return true;
+    for (let i=0;i<a.length;i++){
+      const ca = corePlayer(a[i]);
+      const cb = corePlayer(b[i]);
+      for (const k of Object.keys(ca)){
+        if (ca[k] !== cb[k]) return true;
+      }
+    }
+    return false;
+  }
 </script>
 
 {% endblock %}

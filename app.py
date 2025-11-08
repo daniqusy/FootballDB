@@ -2,6 +2,7 @@ import os, time
 from flask import Flask, render_template, request, jsonify
 from dotenv import load_dotenv
 import pymysql
+from pymongo import MongoClient
 
 load_dotenv()
 app = Flask(__name__)
@@ -23,6 +24,16 @@ def run_sql(sql, params=()):
             rows = cur.fetchall()
     ms = round((time.perf_counter() - t0) * 1000.0, 2)
     return rows, ms
+
+# Mongo connection for optional data source
+mongo_client = MongoClient(os.getenv("MONGO_URI", "mongodb://localhost:27017"))
+mongo_db = mongo_client.get_database(os.getenv("MONGO_DB", "football_nonrelationaldb"))
+
+def run_mongo(fn):
+  t0 = time.perf_counter()
+  result = fn(mongo_db)
+  ms = round((time.perf_counter() - t0) * 1000.0, 2)
+  return result, ms
 
 @app.route("/")
 def index():
@@ -372,6 +383,18 @@ def api_competitions():
     rows, ms = run_sql(sql)
     return jsonify(dict(ms=ms, rows=rows))
 
+# Seasons for a competition (for Top Scorers season dropdown)
+@app.get("/api/competitions/<comp_id>/seasons")
+def api_competition_seasons(comp_id):
+    sql = """
+      SELECT DISTINCT g.season
+      FROM game g
+      WHERE g.competition_id = %s
+      ORDER BY g.season DESC
+    """
+    rows, ms = run_sql(sql, (comp_id,))
+    return jsonify(dict(ms=ms, rows=rows))
+
 # Matches by date
 @app.get("/api/matches/by-date")
 def api_matches_by_date():
@@ -392,15 +415,54 @@ def api_matches_by_date():
       ORDER BY g.competition_id, g.game_id
     """
     rows, ms = run_sql(sql, (sel_date,))
-    return jsonify(dict(ms=ms, rows=rows, date=sel_date))
+    return jsonify(dict(ms=ms, rows=rows, date=sel_date, source="sql"))
+
+@app.get("/api/mongo/matches/by-date")
+def api_mongo_matches_by_date():
+    sel_date = request.args.get("date")
+    def _q(db):
+        cur = db.games.find({"date": sel_date}, {
+            "competition_id": 1, "_id": 1,
+            "home.club_id": 1, "home.name": 1, "home.goals": 1,
+            "away.club_id": 1, "away.name": 1, "away.goals": 1
+        })
+        docs = list(cur)
+        out = []
+        for d in docs:
+            home = d.get("home") or {}
+            away = d.get("away") or {}
+            out.append({
+                "league_id": d.get("competition_id"),
+                "game_id": d.get("_id"),
+                "home_club_id": home.get("club_id"),
+                "home_name": home.get("name"),
+                "home_club_goals": home.get("goals"),
+                "away_club_id": away.get("club_id"),
+                "away_name": away.get("name"),
+                "away_club_goals": away.get("goals"),
+                "league_name": None
+            })
+        return out
+    rows, ms = run_mongo(_q)
+    return jsonify(dict(ms=ms, rows=rows, date=sel_date, source="mongo"))
 
 # Max match date
 @app.get("/api/matches/max-date")
 def api_matches_max_date():
-    sql = "SELECT MAX(date) AS max_date FROM game"
-    rows, ms = run_sql(sql)
-    max_date = rows[0]['max_date'].strftime("%Y-%m-%d") if rows and rows[0]['max_date'] else None
-    return jsonify(dict(ms=ms, max_date=max_date))
+  sql = "SELECT MAX(date) AS max_date FROM game"
+  rows, ms = run_sql(sql)
+  max_date = rows[0]['max_date'].strftime("%Y-%m-%d") if rows and rows[0]['max_date'] else None
+  return jsonify(dict(ms=ms, max_date=max_date, source="sql"))
+
+@app.get("/api/mongo/matches/max-date")
+def api_mongo_matches_max_date():
+    def _q(db):
+        # dates are strings YYYY-MM-DD, max lex order matches chronological
+        doc = db.games.aggregate([{ "$group": { "_id": None, "max": { "$max": "$date" } } }])
+        res = list(doc)
+        return res[0].get("max") if res else None
+    max_date, ms = run_mongo(_q)
+    return jsonify(dict(ms=ms, max_date=max_date, source="mongo"))
 
 
 # Top market value players
@@ -518,6 +580,56 @@ def api_player_matches(pid):
     """
     rows, ms = run_sql(sql, (pid, comp, season, limit_n))
     return jsonify(dict(ms=ms, rows=rows))
+
+# Mongo: Player matches (from player_seasons.latest_matches)
+@app.get("/api/mongo/player/<int:pid>/matches")
+def api_mongo_player_matches(pid):
+  comp = request.args.get("competition_id")
+  season = request.args.get("season")
+  limit_n = int(request.args.get("n", 10))
+
+  def _q(db):
+    doc = db.player_seasons.find_one(
+      {"player_id": int(pid), "competition_id": comp, "season": season},
+      {"latest_matches": 1, "matches": 1}
+    )
+    arr = []
+    if doc:
+      arr = doc.get("latest_matches") or doc.get("matches") or []
+    out = []
+
+    # helper: first non-None value (allows 0)
+    def first_not_none(*vals):
+      for v in vals:
+        if v is not None:
+          return v
+      return None
+
+    for m in arr[:limit_n]:
+      home_id = m.get("home_club_id")
+      away_id = m.get("away_club_id")
+      home_name = m.get("home_name") or (f"Club {home_id}" if home_id is not None else None)
+      away_name = m.get("away_name") or (f"Club {away_id}" if away_id is not None else None)
+      out.append({
+        "date_str": m.get("date_str") or m.get("date"),
+        "competition_id": comp,
+        "season": season,
+        "minutes_played": first_not_none(m.get("minutes_played"), m.get("min"), m.get("minutes")),
+        "goals": first_not_none(m.get("goals"), m.get("g")),
+        "assists": first_not_none(m.get("assists"), m.get("a")),
+        "yellow_cards": first_not_none(m.get("yellow_cards"), m.get("yc"), m.get("yellow")),
+        "red_cards": first_not_none(m.get("red_cards"), m.get("rc"), m.get("red")),
+        "home_club_id": home_id,
+        "home_name": home_name,
+        "away_name": away_name,
+        "away_club_id": away_id,
+        "home_club_goals": first_not_none(m.get("home_club_goals"), m.get("home_goals"), m.get("home_score"), m.get("hg")),
+        "away_club_goals": first_not_none(m.get("away_club_goals"), m.get("away_goals"), m.get("away_score"), m.get("ag")),
+      })
+    return out
+
+  rows, ms = run_mongo(_q)
+  return jsonify(dict(ms=ms, rows=rows))
 
 # Player career transfers
 @app.get("/api/player/<int:pid>/career")

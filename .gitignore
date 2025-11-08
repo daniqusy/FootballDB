@@ -6,7 +6,7 @@ env/
 .venv*/
 .env
 *.sqlite3
-.history
+*.history
 
 # Node/build (if you add a frontend)
 node_modules/

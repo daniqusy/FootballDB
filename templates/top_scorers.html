@@ -16,12 +16,9 @@
     </div>
     <div class="col-12 col-md-3">
       <label class="form-label">Season</label>
-      <input
-        class="form-control"
-        name="season"
-        placeholder="e.g., 2023"
-        required
-      />
+      <select class="form-select" name="season" id="season" required>
+        <option value="">Select season…</option>
+      </select>
     </div>
     <div class="col-6 col-md-2">
       <label class="form-label">Page size</label>
@@ -76,6 +73,7 @@
   const prevBtn = document.getElementById("prev-btn");
   const nextBtn = document.getElementById("next-btn");
   const compSel = document.getElementById("competition_id");
+  const seasonSel = document.getElementById("season");
 
   async function loadCompetitions() {
     const res = await fetch("/api/competitions");
@@ -101,6 +99,35 @@
     const url = new URL(window.location.href);
     if (!url.searchParams.get("competition_id") && defaultCid) {
       compSel.value = defaultCid;
+    }
+    // After competitions load, populate seasons for the selected competition
+    if (compSel.value) {
+      await loadSeasons(compSel.value);
+    }
+  }
+
+  async function loadSeasons(competitionId) {
+    seasonSel.innerHTML = '<option value="">Loading seasons…</option>';
+    const res = await fetch(
+      `/api/competitions/${encodeURIComponent(competitionId)}/seasons`
+    );
+    const data = await res.json();
+    seasonSel.innerHTML = '<option value="">Select season…</option>';
+    let defaultSeason = null;
+    data.rows.forEach((r) => {
+      const opt = document.createElement("option");
+      opt.value = r.season;
+      opt.textContent = r.season;
+      seasonSel.appendChild(opt);
+      if (!defaultSeason) defaultSeason = r.season;
+    });
+    // Respect deep link if present; otherwise default to latest
+    const url = new URL(window.location.href);
+    const deepSeason = url.searchParams.get("season");
+    if (deepSeason) {
+      seasonSel.value = deepSeason;
+    } else if (defaultSeason) {
+      seasonSel.value = defaultSeason;
     }
   }
 
@@ -142,6 +169,17 @@
     await loadPage(params);
   });
 
+  // Update seasons when competition changes and reset page to 1
+  compSel.addEventListener("change", async () => {
+    if (compSel.value) {
+      await loadSeasons(compSel.value);
+    } else {
+      seasonSel.innerHTML = '<option value="">Select season…</option>';
+    }
+    const pageEl = form.querySelector('input[name="page"]');
+    if (pageEl) pageEl.value = 1;
+  });
+
   prevBtn.addEventListener("click", async () => {
     const fd = new FormData(form);
     const params = Object.fromEntries(fd.entries());
@@ -168,10 +206,14 @@
         if (el) el.value = url.searchParams.get(k);
       }
     });
-    if (
-      url.searchParams.get("competition_id") &&
-      url.searchParams.get("season")
-    ) {
+    // If deep link includes competition, ensure seasons are loaded then optionally submit
+    const deepComp = url.searchParams.get("competition_id");
+    if (deepComp) {
+      await loadSeasons(deepComp);
+      const deepSeason = url.searchParams.get("season");
+      if (deepSeason) seasonSel.value = deepSeason;
+    }
+    if (compSel.value && seasonSel.value) {
       form.dispatchEvent(new Event("submit"));
     }
   })();
