@@ -25,6 +25,91 @@ def run_sql(sql, params=()):
     ms = round((time.perf_counter() - t0) * 1000.0, 2)
     return rows, ms
 
+# Extended SQL runner with performance diagnostics
+def run_sql_ex(sql, params=()):
+  """Execute SQL and collect performance diagnostics with separated timings.
+
+  Returns (rows, execution_ms, perf) where perf contains:
+    rows_examined, rows_sent, explain_type, explain, query_cache,
+    execution_ms, diagnostics_ms, total_ms.
+  """
+  perf = {
+    "rows_examined": None,
+    "rows_sent": None,
+    "explain_type": None,
+    "explain": None,
+    "query_cache": None,
+    "execution_ms": None,
+    "diagnostics_ms": None,
+    "total_ms": None,
+  }
+  t_total_start = time.perf_counter()
+  with pymysql.connect(**conn_args) as conn:
+    with conn.cursor() as cur:
+      # Capture before-status
+      try:
+        cur.execute("SHOW SESSION STATUS LIKE 'Rows_examined'")
+        rex_before = int((cur.fetchone() or {}).get('Value', 0))
+        cur.execute("SHOW SESSION STATUS LIKE 'Rows_sent'")
+        rse_before = int((cur.fetchone() or {}).get('Value', 0))
+      except Exception:
+        rex_before = rse_before = None
+
+      # Main query timing
+      t_exec_start = time.perf_counter()
+      cur.execute(sql, params)
+      rows = cur.fetchall()
+      perf["execution_ms"] = round((time.perf_counter() - t_exec_start) * 1000.0, 2)
+
+      # After-status deltas
+      try:
+        if rex_before is not None:
+          cur.execute("SHOW SESSION STATUS LIKE 'Rows_examined'")
+          rex_after = int((cur.fetchone() or {}).get('Value', 0))
+          perf["rows_examined"] = max(rex_after - rex_before, 0)
+        if rse_before is not None:
+          cur.execute("SHOW SESSION STATUS LIKE 'Rows_sent'")
+          rse_after = int((cur.fetchone() or {}).get('Value', 0))
+          perf["rows_sent"] = max(rse_after - rse_before, 0)
+      except Exception:
+        pass
+
+      # Diagnostics timing starts
+      t_diag_start = time.perf_counter()
+      explain_sql = f"EXPLAIN ANALYZE {sql}"
+      try:
+        cur.execute(explain_sql, params)
+        exp_rows = cur.fetchall()
+        txt = []
+        for r in exp_rows:
+          val = next(iter(r.values())) if isinstance(r, dict) else str(r)
+          if val is not None:
+            txt.append(str(val))
+        perf["explain_type"] = "analyze"
+        perf["explain"] = "\n".join(txt) if txt else None
+      except Exception:
+        try:
+          cur.execute(f"EXPLAIN FORMAT=JSON {sql}", params)
+          exp = cur.fetchone()
+          val = next(iter(exp.values())) if exp else None
+          perf["explain_type"] = "json"
+          perf["explain"] = val
+        except Exception:
+          perf["explain_type"] = None
+          perf["explain"] = None
+
+      # Query cache stats
+      try:
+        cur.execute("SHOW STATUS LIKE 'Qcache_%'")
+        qrows = cur.fetchall() or []
+        perf["query_cache"] = {r.get('Variable_name'): r.get('Value') for r in qrows} or {"supported": False}
+      except Exception:
+        perf["query_cache"] = {"supported": False}
+      perf["diagnostics_ms"] = round((time.perf_counter() - t_diag_start) * 1000.0, 2)
+  perf["total_ms"] = round((time.perf_counter() - t_total_start) * 1000.0, 2)
+  # For backward compatibility ms returns execution time only
+  return rows, perf["execution_ms"], perf
+
 # Mongo connection for optional data source
 mongo_client = MongoClient(os.getenv("MONGO_URI", "mongodb://localhost:27017"))
 mongo_db = mongo_client.get_database(os.getenv("MONGO_DB", "football_nonrelationaldb"))
@@ -414,8 +499,8 @@ def api_matches_by_date():
       WHERE g.date = %s
       ORDER BY g.competition_id, g.game_id
     """
-    rows, ms = run_sql(sql, (sel_date,))
-    return jsonify(dict(ms=ms, rows=rows, date=sel_date, source="sql"))
+    rows, ms, perf = run_sql_ex(sql, (sel_date,))
+    return jsonify(dict(ms=ms, rows=rows, date=sel_date, source="sql", perf=perf))
 
 @app.get("/api/mongo/matches/by-date")
 def api_mongo_matches_by_date():
@@ -450,9 +535,9 @@ def api_mongo_matches_by_date():
 @app.get("/api/matches/max-date")
 def api_matches_max_date():
   sql = "SELECT MAX(date) AS max_date FROM game"
-  rows, ms = run_sql(sql)
+  rows, ms, perf = run_sql_ex(sql)
   max_date = rows[0]['max_date'].strftime("%Y-%m-%d") if rows and rows[0]['max_date'] else None
-  return jsonify(dict(ms=ms, max_date=max_date, source="sql"))
+  return jsonify(dict(ms=ms, max_date=max_date, source="sql", perf=perf))
 
 @app.get("/api/mongo/matches/max-date")
 def api_mongo_matches_max_date():
@@ -476,8 +561,8 @@ def api_top_market():
       ORDER BY p.market_value_eur DESC
       LIMIT %s
     """
-    rows, ms = run_sql(sql, (limit_k,))
-    return jsonify(dict(ms=ms, rows=rows))
+    rows, ms, perf = run_sql_ex(sql, (limit_k,))
+    return jsonify(dict(ms=ms, rows=rows, perf=perf))
 
 # Player search
 @app.get("/api/players/search")
@@ -490,8 +575,8 @@ def api_players_search():
       ORDER BY name
       LIMIT 20
     """
-    rows, ms = run_sql(sql, (f"%{q}%",))
-    return jsonify(dict(ms=ms, rows=rows))
+    rows, ms, perf = run_sql_ex(sql, (f"%{q}%",))
+    return jsonify(dict(ms=ms, rows=rows, perf=perf))
 
 # Competitions for a player
 @app.get("/api/players/<int:pid>/competitions")
@@ -538,8 +623,8 @@ def api_player_profile(pid):
       JOIN player_bio pb ON pb.player_id=p.player_id
       WHERE p.player_id=%s
     """
-    rows, ms = run_sql(sql, (pid,))
-    return jsonify(dict(ms=ms, row=rows[0] if rows else None))
+    rows, ms, perf = run_sql_ex(sql, (pid,))
+    return jsonify(dict(ms=ms, row=rows[0] if rows else None, perf=perf))
 
 # Player season summary
 @app.get("/api/player/<int:pid>/season-summary")
@@ -557,8 +642,8 @@ def api_player_season_summary(pid):
       GROUP BY g.competition_id, g.season
       ORDER BY g.season DESC, g.competition_id
     """
-    rows, ms = run_sql(sql, (pid,))
-    return jsonify(dict(ms=ms, rows=rows))
+    rows, ms, perf = run_sql_ex(sql, (pid,))
+    return jsonify(dict(ms=ms, rows=rows, perf=perf))
 
 # Player matches
 @app.get("/api/player/<int:pid>/matches")
@@ -578,8 +663,8 @@ def api_player_matches(pid):
       ORDER BY g.date DESC
       LIMIT %s
     """
-    rows, ms = run_sql(sql, (pid, comp, season, limit_n))
-    return jsonify(dict(ms=ms, rows=rows))
+    rows, ms, perf = run_sql_ex(sql, (pid, comp, season, limit_n))
+    return jsonify(dict(ms=ms, rows=rows, perf=perf))
 
 # Mongo: Player matches (from player_seasons.latest_matches)
 @app.get("/api/mongo/player/<int:pid>/matches")

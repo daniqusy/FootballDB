@@ -184,6 +184,13 @@
           >
         </div>
         <small id="matches-meta" class="meta-line"></small>
+        <button
+          id="perf-more"
+          class="btn btn-link btn-sm text-decoration-none p-0 ms-auto"
+          style="display: none"
+        >
+          More…
+        </button>
       </div>
       <div id="matches-container" class="vstack gap-3"></div>
     </main>
@@ -305,6 +312,17 @@
       );
     }
     const srcLabel = source.toUpperCase();
+    // Performance modal activation for SQL primary source only
+    const perfBtn = document.getElementById("perf-more");
+    const usePerf = source === "sql" && data.perf;
+    if (usePerf) {
+      perfBtn.style.display = "";
+      perfBtn.onclick = () =>
+        openPerfModal("Matches by date", data.perf, sqlQueryText(dateStr));
+    } else {
+      perfBtn.style.display = "none";
+    }
+
     if (compare) {
       const otherLabel = source === "sql" ? "Mongo" : "SQL";
       const diffPill = hasDiff ? '<span class="meta-diff">diff</span>' : "";
@@ -397,6 +415,79 @@
       });
   }
 
+  // Build a pseudo SQL string for display (sanitized)
+  function sqlQueryText(dateStr) {
+    return `SELECT ... FROM game WHERE date = '${dateStr}'`; // simplified
+  }
+
+  function openPerfModal(title, perf, sqlText) {
+    const modalId = "perf-modal";
+    let wrap = document.getElementById(modalId);
+    if (!wrap) {
+      wrap = document.createElement("div");
+      wrap.id = modalId;
+      wrap.className = "modal fade";
+      wrap.tabIndex = -1;
+      wrap.innerHTML = `
+      <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title">Query Performance</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body">
+            <div id="perf-body"></div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+          </div>
+        </div>
+      </div>`;
+      document.body.appendChild(wrap);
+    }
+    const body = wrap.querySelector("#perf-body");
+    const qc = perf.query_cache || {};
+    const qcRows = Object.keys(qc)
+      .map((k) => `<tr><td>${k}</td><td>${qc[k]}</td></tr>`)
+      .join("");
+    body.innerHTML = `
+      <h6 class="fw-semibold mb-2">${title}</h6>
+      <pre class="small bg-light p-2 rounded border" style="white-space:pre-wrap">${sqlText}</pre>
+      <table class="table table-sm mb-3">
+        <tbody>
+          <tr><th style="width:180px">Execution time</th><td>${
+            perf.execution_ms ?? "—"
+          } ms</td></tr>
+          <tr><th>Diagnostics time</th><td>${
+            perf.diagnostics_ms ?? "—"
+          } ms</td></tr>
+          <tr><th>Total (exec + diag)</th><td>${
+            perf.total_ms ?? "—"
+          } ms</td></tr>
+          <tr><th style="width:180px">Rows examined</th><td>${
+            perf.rows_examined ?? "—"
+          }</td></tr>
+          <tr><th>Rows sent</th><td>${perf.rows_sent ?? "—"}</td></tr>
+          <tr><th>Explain type</th><td>${perf.explain_type ?? "—"}</td></tr>
+        </tbody>
+      </table>
+      <div class="mb-3">
+        <div class="fw-semibold">Explain Plan</div>
+        <pre class="small bg-dark text-light p-2 rounded" style="max-height:240px;overflow:auto;white-space:pre-wrap">${
+          perf.explain || "No explain output"
+        }</pre>
+      </div>
+      <div>
+        <div class="fw-semibold">Query Cache Stats</div>
+        <table class="table table-sm"><tbody>${
+          qcRows ||
+          '<tr><td colspan="2" class="text-muted">Not supported</td></tr>'
+        }</tbody></table>
+      </div>`;
+    const modal = bootstrap.Modal.getOrCreateInstance(wrap);
+    modal.show();
+  }
+
   async function loadTopMarket() {
     const data = await fetchJSON("/api/players/top-market?k=10");
     const ul = document.getElementById("top-market");
@@ -417,7 +508,21 @@
                     <span class="badge text-bg-success">€${val}</span>`;
       ul.appendChild(li);
     });
-    meta.textContent = `Query time: ${data.ms} ms`;
+    meta.innerHTML = `Query time: ${data.ms} ms ${
+      data.perf
+        ? '<button id="top-perf-more" class="btn btn-link btn-sm p-0 align-baseline">More…</button>'
+        : ""
+    }`;
+    const btn = document.getElementById("top-perf-more");
+    if (btn && data.perf) {
+      btn.addEventListener("click", () =>
+        openPerfModal(
+          "Top market values",
+          data.perf,
+          "SELECT ... FROM player WHERE market_value_eur IS NOT NULL ORDER BY market_value_eur DESC LIMIT 10"
+        )
+      );
+    }
   }
 
   // Live player search

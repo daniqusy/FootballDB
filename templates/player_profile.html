@@ -242,6 +242,7 @@
     </div>
     <button id="pp-refresh" class="btn btn-primary btn-sm">Refresh</button>
     <small id="pp-meta" class="subtle ms-auto"></small>
+    <button id="pp-perf-more" class="btn btn-link btn-sm text-decoration-none p-0" style="display:none">More…</button>
   </div>
 
   <!-- Matches -->
@@ -509,7 +510,16 @@
         sourceSel === 'sql' ? compareRes.rows : res.rows
       );
     }
-    const metaEl = document.getElementById("pp-meta");
+  const metaEl = document.getElementById("pp-meta");
+  const perfBtn = document.getElementById('pp-perf-more');
+    // Activate perf modal button for SQL source
+    if (sourceSel === 'sql' && res.perf){
+      perfBtn.style.display='';
+      perfBtn.onclick = () => openPerfModal('Player matches', res.perf, buildPlayerMatchesSQL(pid, cid, sea));
+    } else {
+      perfBtn.style.display='none';
+    }
+
     if (compare && compareRes) {
       const aLabel = sourceSel.toUpperCase();
       const bLabel = sourceSel === 'sql' ? 'Mongo' : 'SQL';
@@ -695,6 +705,25 @@
       }
     }
     return false;
+  }
+
+  function buildPlayerMatchesSQL(pid, comp, season){
+    return `SELECT ... FROM appearance JOIN game WHERE player_id=${pid} AND competition_id=${comp} AND season='${season}' ORDER BY date DESC LIMIT 10`; // simplified
+  }
+
+  function openPerfModal(title, perf, sqlText){
+    const id='pp-perf-modal';
+    let wrap=document.getElementById(id);
+    if(!wrap){
+      wrap=document.createElement('div');
+      wrap.id=id;wrap.className='modal fade';wrap.tabIndex=-1;
+      wrap.innerHTML=`<div class="modal-dialog modal-lg modal-dialog-scrollable"><div class="modal-content"><div class="modal-header"><h5 class="modal-title">Query Performance</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><div id="pp-perf-body"></div></div><div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button></div></div></div>`;
+      document.body.appendChild(wrap);
+    }
+    const body=wrap.querySelector('#pp-perf-body');
+    const qc=perf.query_cache||{};const qcRows=Object.keys(qc).map(k=>`<tr><td>${k}</td><td>${qc[k]}</td></tr>`).join('');
+  body.innerHTML=`<h6 class="fw-semibold mb-2">${title}</h6><pre class="small bg-light p-2 rounded border" style="white-space:pre-wrap">${sqlText}</pre><table class="table table-sm mb-3"><tbody><tr><th style="width:180px">Execution time</th><td>${perf.execution_ms ?? '—'} ms</td></tr><tr><th>Diagnostics time</th><td>${perf.diagnostics_ms ?? '—'} ms</td></tr><tr><th>Total (exec + diag)</th><td>${perf.total_ms ?? '—'} ms</td></tr><tr><th style="width:180px">Rows examined</th><td>${perf.rows_examined ?? '—'}</td></tr><tr><th>Rows sent</th><td>${perf.rows_sent ?? '—'}</td></tr><tr><th>Explain type</th><td>${perf.explain_type ?? '—'}</td></tr></tbody></table><div class="mb-3"><div class="fw-semibold">Explain Plan</div><pre class="small bg-dark text-light p-2 rounded" style="max-height:240px;overflow:auto;white-space:pre-wrap">${(perf.explain||'No explain output')}</pre></div><div><div class="fw-semibold">Query Cache Stats</div><table class="table table-sm"><tbody>${qcRows || '<tr><td colspan="2" class="text-muted">Not supported</td></tr>'}</tbody></table></div>`;
+    bootstrap.Modal.getOrCreateInstance(wrap).show();
   }
 </script>
 
