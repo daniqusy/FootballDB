@@ -1,0 +1,304 @@
+{% extends "base.html" %} {% block body %}
+<div class="container py-4">
+  <h1 class="h4 mb-4">Edit Game Event</h1>
+  <form id="eef" class="row g-3">
+    
+    <!-- SECTION 1: Game & Event Type -->
+    <div class="col-12">
+      <h5 class="text-muted small text-uppercase fw-bold" style="letter-spacing: 0.5px;">Event Information</h5>
+    </div>
+
+    <div class="col-12 col-md-4">
+      <label class="form-label">Game ID *</label>
+      <input class="form-control" id="game_id" type="number" required placeholder="e.g., 1001" />
+    </div>
+
+    <div class="col-12 col-md-4">
+      <label class="form-label">Minute *</label>
+      <input class="form-control" id="minute" type="number" min="0" max="120" required placeholder="e.g., 45" />
+    </div>
+
+    <div class="col-12 col-md-4">
+      <label class="form-label">Event Type *</label>
+      <select class="form-select" id="type" required>
+        <option value="">Select Type</option>
+        <option value="Goals">Goals</option>
+        <option value="Cards">Cards</option>
+        <option value="Substitutions">Substitutions</option>
+        <option value="Shootout">Shootout</option>
+      </select>
+    </div>
+
+    <!-- SECTION 2: Club & Player -->
+    <div class="col-12">
+      <h5 class="text-muted small text-uppercase fw-bold mt-3" style="letter-spacing: 0.5px;">Club & Player Information</h5>
+    </div>
+
+    <div class="col-12 col-md-6">
+      <label class="form-label">Club</label>
+      <div class="input-group">
+        <input class="form-control" id="club_name" placeholder="Search club..." autocomplete="off" />
+        <input type="hidden" id="club_id" />
+      </div>
+      <small id="club-search-results" class="form-text text-muted"></small>
+    </div>
+
+    <div class="col-12 col-md-6">
+      <label class="form-label">Player</label>
+      <div class="input-group">
+        <input class="form-control" id="player_name" placeholder="Search player..." autocomplete="off" />
+        <input type="hidden" id="player_id" />
+      </div>
+      <small id="player-search-results" class="form-text text-muted"></small>
+    </div>
+
+    <!-- SECTION 3: Related Players (for assists/substitutions) -->
+    <div class="col-12">
+      <h5 class="text-muted small text-uppercase fw-bold mt-3" style="letter-spacing: 0.5px;">Related Players</h5>
+    </div>
+
+    <div class="col-12 col-md-6">
+      <label class="form-label">Assist Player (for Goals)</label>
+      <div class="input-group">
+        <input class="form-control" id="player_assist_name" placeholder="Search player..." autocomplete="off" />
+        <input type="hidden" id="player_assist_id" />
+      </div>
+      <small id="assist-search-results" class="form-text text-muted"></small>
+    </div>
+
+    <div class="col-12 col-md-6">
+      <label class="form-label">Player In (for Substitutions)</label>
+      <div class="input-group">
+        <input class="form-control" id="player_in_name" placeholder="Search player..." autocomplete="off" />
+        <input type="hidden" id="player_in_id" />
+      </div>
+      <small id="player-in-search-results" class="form-text text-muted"></small>
+    </div>
+
+    <!-- SECTION 4: Description -->
+    <div class="col-12">
+      <h5 class="text-muted small text-uppercase fw-bold mt-3" style="letter-spacing: 0.5px;">Additional Details</h5>
+    </div>
+
+    <div class="col-12">
+      <label class="form-label">Description</label>
+      <textarea class="form-control" id="description" rows="3" placeholder="e.g., Red card for violent conduct"></textarea>
+    </div>
+
+    <!-- SECTION 5: Submit -->
+    <div class="col-12 pt-3 border-top">
+      <button type="submit" id="submitBtn" class="btn btn-primary btn-lg">Update Event</button>
+      <a href="/game-events" class="btn btn-secondary btn-lg">Cancel</a>
+      <div id="result" class="mt-3"></div>
+    </div>
+  </form>
+</div>
+
+<script>
+  const urlParams = new URLSearchParams(window.location.search);
+  const eventId = urlParams.get("event_id");
+
+  if (!eventId) {
+    document.getElementById("result").textContent = "Error: Event ID not provided";
+    document.getElementById("result").className = "mt-3 text-danger";
+  } else {
+    // Load event data
+    async function loadEventData() {
+      try {
+        const res = await fetch(`/api/game-event/${eventId}`);
+        const data = await res.json();
+        const event = data.row;
+
+        if (!event) {
+          document.getElementById("result").textContent = "Event not found";
+          document.getElementById("result").className = "mt-3 text-danger";
+          return;
+        }
+
+        // Fill form fields
+        document.getElementById("game_id").value = event.game_id || "";
+        document.getElementById("minute").value = event.minute || "";
+        document.getElementById("type").value = event.type || "";
+        document.getElementById("club_id").value = event.club_id || "";
+        document.getElementById("player_id").value = event.player_id || "";
+        document.getElementById("player_assist_id").value = event.player_assist_id || "";
+        document.getElementById("player_in_id").value = event.player_in_id || "";
+        document.getElementById("description").value = event.description || "";
+
+        // Fetch club name
+        if (event.club_id) {
+          try {
+            const clubRes = await fetch(`/api/club/${event.club_id}/profile`);
+            const clubData = await clubRes.json();
+            if (clubData.row && clubData.row.name) {
+              document.getElementById("club_name").value = clubData.row.name;
+            }
+          } catch (err) {
+            console.error("Failed to fetch club name:", err);
+          }
+        }
+
+        // Fetch player name
+        if (event.player_id) {
+          try {
+            const playerRes = await fetch(`/api/player/${event.player_id}/profile`);
+            const playerData = await playerRes.json();
+            if (playerData.row && playerData.row.name) {
+              document.getElementById("player_name").value = playerData.row.name;
+            }
+          } catch (err) {
+            console.error("Failed to fetch player name:", err);
+          }
+        }
+
+        // Fetch assist player name
+        if (event.player_assist_id) {
+          try {
+            const assistRes = await fetch(`/api/player/${event.player_assist_id}/profile`);
+            const assistData = await assistRes.json();
+            if (assistData.row && assistData.row.name) {
+              document.getElementById("player_assist_name").value = assistData.row.name;
+            }
+          } catch (err) {
+            console.error("Failed to fetch assist player name:", err);
+          }
+        }
+
+        // Fetch player in name
+        if (event.player_in_id) {
+          try {
+            const playerInRes = await fetch(`/api/player/${event.player_in_id}/profile`);
+            const playerInData = await playerInRes.json();
+            if (playerInData.row && playerInData.row.name) {
+              document.getElementById("player_in_name").value = playerInData.row.name;
+            }
+          } catch (err) {
+            console.error("Failed to fetch player in name:", err);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to load event data:", err);
+        document.getElementById("result").textContent = "Failed to load event data";
+        document.getElementById("result").className = "mt-3 text-danger";
+      }
+    }
+
+    window.addEventListener("load", loadEventData);
+  }
+
+  // Search functions
+  async function searchClubs(query) {
+    if (!query || query.length < 1) return [];
+    try {
+      const res = await fetch(`/api/clubs/search?q=${encodeURIComponent(query)}`);
+      const data = await res.json();
+      return data.rows || [];
+    } catch (err) {
+      console.error("Club search failed:", err);
+      return [];
+    }
+  }
+
+  async function searchPlayers(query) {
+    if (!query || query.length < 1) return [];
+    try {
+      const res = await fetch(`/api/players/search?q=${encodeURIComponent(query)}`);
+      const data = await res.json();
+      return data.rows || [];
+    } catch (err) {
+      console.error("Player search failed:", err);
+      return [];
+    }
+  }
+
+  // Generic search setup
+  function setupSearch(nameInputId, idInputId, resultsId, searchFn) {
+    let searchTimeout;
+    document.getElementById(nameInputId).addEventListener("input", async (e) => {
+      clearTimeout(searchTimeout);
+      const query = e.target.value.trim();
+      const resultsDiv = document.getElementById(resultsId);
+
+      if (!query) {
+        resultsDiv.innerHTML = "";
+        return;
+      }
+
+      searchTimeout = setTimeout(async () => {
+        const results = await searchFn(query);
+        if (results.length === 0) {
+          resultsDiv.innerHTML = '<span class="text-danger">No results found</span>';
+          return;
+        }
+
+        let html = '<div class="list-group mt-2">';
+        results.forEach(item => {
+          const displayName = item.name || item.club_name || item.player_name;
+          const id = item.club_id || item.player_id;
+          html += `<button type="button" class="list-group-item list-group-item-action search-option" data-id="${id}" data-name="${displayName}">${displayName}</button>`;
+        });
+        html += '</div>';
+        resultsDiv.innerHTML = html;
+
+        document.querySelectorAll(".search-option").forEach(btn => {
+          btn.addEventListener("click", (e) => {
+            e.preventDefault();
+            document.getElementById(nameInputId).value = btn.getAttribute("data-name");
+            document.getElementById(idInputId).value = btn.getAttribute("data-id");
+            resultsDiv.innerHTML = "";
+          });
+        });
+      }, 300);
+    });
+  }
+
+  // Setup all search fields
+  setupSearch("club_name", "club_id", "club-search-results", searchClubs);
+  setupSearch("player_name", "player_id", "player-search-results", searchPlayers);
+  setupSearch("player_assist_name", "player_assist_id", "assist-search-results", searchPlayers);
+  setupSearch("player_in_name", "player_in_id", "player-in-search-results", searchPlayers);
+
+  document.getElementById("eef").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    
+    const data = {
+      game_id: document.getElementById("game_id").value,
+      minute: document.getElementById("minute").value,
+      type: document.getElementById("type").value,
+      club_id: document.getElementById("club_id").value || null,
+      player_id: document.getElementById("player_id").value || null,
+      player_assist_id: document.getElementById("player_assist_id").value || null,
+      player_in_id: document.getElementById("player_in_id").value || null,
+      description: document.getElementById("description").value || null,
+    };
+
+    const resEl = document.getElementById("result");
+    resEl.textContent = "Saving...";
+    resEl.className = "mt-3";
+
+    try {
+      const resp = await fetch(`/api/game-event/${eventId}/update`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      const body = await resp.json();
+      if (!resp.ok) {
+        resEl.textContent = "Error: " + (body.error || JSON.stringify(body)) + (body.details ? " — " + body.details : "");
+        resEl.className = "mt-3 text-danger";
+        console.error(body);
+        return;
+      }
+      resEl.innerHTML = `✓ Event updated successfully`;
+      resEl.className = "mt-3 text-success";
+      setTimeout(() => {
+        window.location.href = "/game-events";
+      }, 1500);
+    } catch (err) {
+      resEl.textContent = "Request failed: " + err.message;
+      resEl.className = "mt-3 text-danger";
+      console.error(err);
+    }
+  });
+</script>
+{% endblock %}

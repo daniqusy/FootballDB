@@ -110,8 +110,8 @@
     document.getElementById(
       "away-name"
     ).innerHTML = `<a class="text-decoration-none" href="/club?club_id=${g.away_club_id}">${g.away_name}</a>`;
-    document.getElementById("home-goals").textContent = g.home_club_goals;
-    document.getElementById("away-goals").textContent = g.away_club_goals;
+    document.getElementById("home-goals").textContent = g.home_club_goals ?? "-";
+    document.getElementById("away-goals").textContent = g.away_club_goals ?? "-";
 
     document.getElementById("home-extra").textContent = [
       safe(g.home_club_position) ? "Pos " + g.home_club_position : "",
@@ -130,10 +130,17 @@
     ]
       .filter(Boolean)
       .join(" • ");
+    
+    // Format match_time if it exists (remove seconds)
+    let matchTimeStr = "";
+    if (safe(g.match_time)) {
+      matchTimeStr = g.match_time.substring(0, 5); // HH:MM format
+    }
+    
     document.getElementById("venue-ref").textContent = [
       safe(g.stadium),
       safe(g.referee),
-      safe(g.match_time),
+      matchTimeStr,
     ]
       .filter(Boolean)
       .join(" • ");
@@ -180,9 +187,12 @@
         (ev.side === "home" ? "justify-content-start" : "justify-content-end") +
         " align-items-center gap-2";
 
+      // Format minute - show "—" if NULL, 0, or negative
+      const minuteText = (ev.minute !== null && ev.minute >= 0) ? `${ev.minute}'` : "—";
+      
       const minute = document.createElement("span");
       minute.className = "badge text-bg-light border";
-      minute.textContent = (ev.minute ?? 0) + "'";
+      minute.textContent = minuteText;
 
       const type = document.createElement("span");
       type.className =
@@ -264,15 +274,18 @@
       const data = await fetchJSON(
         `/api/match?game_id=${encodeURIComponent(gid)}`
       );
-      if (!data.game) {
-        alert("Match not found");
+      console.log("Match data:", data); // Debug log
+      if (!data || !data.game) {
+        document.getElementById("match-header").innerHTML = 
+          `<div class="card-body text-danger">Match not found. Response: ${JSON.stringify(data)}</div>`;
         return;
       }
       renderHeader(data.game);
       renderEvents(data.events || []);
     } catch (e) {
-      console.error(e);
-      alert("Failed to load match data");
+      console.error("Error details:", e);
+      document.getElementById("match-header").innerHTML = 
+        `<div class="card-body text-danger">Failed to load match data: ${e.message}</div>`;
     }
   }
   init();

@@ -1,0 +1,351 @@
+{% extends "base.html" %} {% block body %}
+<div class="container py-4">
+  <h1 class="h4 mb-4">Edit Match</h1>
+  <form id="emf" class="row g-3">
+    
+    <!-- SECTION 1: Basic Info -->
+    <div class="col-12">
+      <h5 class="text-muted small text-uppercase fw-bold" style="letter-spacing: 0.5px;">Match Information</h5>
+    </div>
+
+    <div class="col-12 col-md-6">
+      <label class="form-label">Date *</label>
+      <input class="form-control" id="date" type="date" required />
+    </div>
+
+    <div class="col-12 col-md-6">
+      <label class="form-label">Match Time</label>
+      <input class="form-control" id="match_time" type="time" />
+    </div>
+
+    <div class="col-12 col-md-4">
+      <label class="form-label">Competition *</label>
+      <select class="form-select" id="competition_id" required>
+        <option value="">Select Competition</option>
+      </select>
+    </div>
+
+    <div class="col-12 col-md-4">
+      <label class="form-label">Season *</label>
+      <input class="form-control" id="season" required placeholder="e.g., 2023/2024" />
+    </div>
+
+    <div class="col-12 col-md-4">
+      <label class="form-label">Round</label>
+      <select class="form-select" id="round">
+        <option value="">Select Round</option>
+        <option value="Group Stage">Group Stage</option>
+        <option value="Playoff">Playoff</option>
+        <option value="Round of 16">Round of 16</option>
+        <option value="Quarterfinal">Quarterfinal</option>
+        <option value="Semifinal">Semifinal</option>
+        <option value="Final">Final</option>
+        <option value="Regular Season">Regular Season</option>
+        <option value="Matchday">Matchday</option>
+      </select>
+    </div>
+
+    <!-- SECTION 2: Teams -->
+    <div class="col-12">
+      <h5 class="text-muted small text-uppercase fw-bold mt-3" style="letter-spacing: 0.5px;">Teams</h5>
+    </div>
+
+    <div class="col-12 col-md-6">
+      <label class="form-label">Home Club *</label>
+      <div class="input-group">
+        <input class="form-control" id="home_club_name" placeholder="Search club name..." autocomplete="off" required />
+        <input type="hidden" id="home_club_id" />
+      </div>
+      <small id="home-search-results" class="form-text text-muted"></small>
+    </div>
+
+    <div class="col-12 col-md-6">
+      <label class="form-label">Away Club *</label>
+      <div class="input-group">
+        <input class="form-control" id="away_club_name" placeholder="Search club name..." autocomplete="off" required />
+        <input type="hidden" id="away_club_id" />
+      </div>
+      <small id="away-search-results" class="form-text text-muted"></small>
+    </div>
+
+    <!-- SECTION 3: Score & Result -->
+    <div class="col-12">
+      <h5 class="text-muted small text-uppercase fw-bold mt-3" style="letter-spacing: 0.5px;">Score & Result</h5>
+    </div>
+
+    <div class="col-6 col-md-3">
+      <label class="form-label">Home Club Goals</label>
+      <input class="form-control" id="home_club_goals" type="number" min="0" placeholder="0" />
+    </div>
+
+    <div class="col-6 col-md-3">
+      <label class="form-label">Away Club Goals</label>
+      <input class="form-control" id="away_club_goals" type="number" min="0" placeholder="0" />
+    </div>
+
+    <div class="col-6 col-md-3">
+      <label class="form-label">Home Club Position</label>
+      <input class="form-control" id="home_club_position" type="number" placeholder="1" />
+    </div>
+
+    <div class="col-6 col-md-3">
+      <label class="form-label">Away Club Position</label>
+      <input class="form-control" id="away_club_position" type="number" placeholder="1" />
+    </div>
+
+    <!-- SECTION 4: Venue & Officials -->
+    <div class="col-12">
+      <h5 class="text-muted small text-uppercase fw-bold mt-3" style="letter-spacing: 0.5px;">Venue & Officials</h5>
+    </div>
+
+    <div class="col-12 col-md-6">
+      <label class="form-label">Stadium</label>
+      <input class="form-control" id="stadium" placeholder="e.g., Old Trafford" />
+    </div>
+
+    <div class="col-12 col-md-6">
+      <label class="form-label">Referee</label>
+      <input class="form-control" id="referee" placeholder="e.g., Mike Dean" />
+    </div>
+
+    <div class="col-12 col-md-4">
+      <label class="form-label">Attendance</label>
+      <input class="form-control" id="attendance" type="number" placeholder="75000" />
+    </div>
+
+    <div class="col-12 col-md-4">
+      <label class="form-label">Home Manager</label>
+      <input class="form-control" id="home_club_manager_name" placeholder="Manager name" />
+    </div>
+
+    <div class="col-12 col-md-4">
+      <label class="form-label">Away Manager</label>
+      <input class="form-control" id="away_club_manager_name" placeholder="Manager name" />
+    </div>
+
+    <!-- SECTION 5: Formations -->
+    <div class="col-12">
+      <h5 class="text-muted small text-uppercase fw-bold mt-3" style="letter-spacing: 0.5px;">Formations</h5>
+    </div>
+
+    <div class="col-12 col-md-6">
+      <label class="form-label">Home Formation</label>
+      <input class="form-control" id="home_club_formation" placeholder="e.g., 4-3-3" />
+    </div>
+
+    <div class="col-12 col-md-6">
+      <label class="form-label">Away Formation</label>
+      <input class="form-control" id="away_club_formation" placeholder="e.g., 4-2-3-1" />
+    </div>
+
+    <!-- SECTION 6: Submit -->
+    <div class="col-12 pt-3 border-top">
+      <button type="submit" id="submitBtn" class="btn btn-primary btn-lg">Update Match</button>
+      <a href="/games" class="btn btn-secondary btn-lg">Cancel</a>
+      <div id="result" class="mt-3"></div>
+    </div>
+  </form>
+</div>
+
+<script>
+  // Load competitions on page load
+  async function loadCompetitions() {
+    try {
+      const res = await fetch("/api/competitions");
+      const data = await res.json();
+      const select = document.getElementById("competition_id");
+      if (data.rows) {
+        data.rows.forEach(comp => {
+          const opt = document.createElement("option");
+          opt.value = comp.competition_id;
+          opt.textContent = comp.competition_name;
+          select.appendChild(opt);
+        });
+      }
+    } catch (err) {
+      console.error("Failed to load competitions:", err);
+    }
+  }
+
+  // Club search functionality
+  async function searchClubs(query) {
+    if (!query || query.length < 1) return [];
+    try {
+      const res = await fetch(`/api/clubs/search?q=${encodeURIComponent(query)}`);
+      const data = await res.json();
+      return data.rows || [];
+    } catch (err) {
+      console.error("Club search failed:", err);
+      return [];
+    }
+  }
+
+  function setupClubSearch(nameInputId, idInputId, resultsId) {
+    let searchTimeout;
+    document.getElementById(nameInputId).addEventListener("input", async (e) => {
+      clearTimeout(searchTimeout);
+      const query = e.target.value.trim();
+      const resultsDiv = document.getElementById(resultsId);
+
+      if (!query) {
+        resultsDiv.innerHTML = "";
+        return;
+      }
+
+      searchTimeout = setTimeout(async () => {
+        const clubs = await searchClubs(query);
+        if (clubs.length === 0) {
+          resultsDiv.innerHTML = '<span class="text-danger">No clubs found</span>';
+          return;
+        }
+
+        let html = '<div class="list-group mt-2">';
+        clubs.forEach(club => {
+          html += `<button type="button" class="list-group-item list-group-item-action club-option" data-id="${club.club_id}" data-name="${club.name}">${club.name}</button>`;
+        });
+        html += '</div>';
+        resultsDiv.innerHTML = html;
+
+        document.querySelectorAll(".club-option").forEach(btn => {
+          btn.addEventListener("click", (e) => {
+            e.preventDefault();
+            document.getElementById(nameInputId).value = btn.getAttribute("data-name");
+            document.getElementById(idInputId).value = btn.getAttribute("data-id");
+            resultsDiv.innerHTML = "";
+          });
+        });
+      }, 300);
+    });
+  }
+
+  const urlParams = new URLSearchParams(window.location.search);
+  const gameId = urlParams.get("game_id");
+
+  if (!gameId) {
+    document.getElementById("result").textContent = "Error: Game ID not provided";
+    document.getElementById("result").className = "mt-3 text-danger";
+  } else {
+    // Load match data
+    async function loadMatchData() {
+      try {
+        const res = await fetch(`/api/match?game_id=${gameId}`);
+        const data = await res.json();
+        const game = data.game;
+
+        if (!game) {
+          document.getElementById("result").textContent = "Match not found";
+          document.getElementById("result").className = "mt-3 text-danger";
+          return;
+        }
+
+        // Fill form fields
+        document.getElementById("date").value = game.date_str || "";
+        document.getElementById("match_time").value = game.match_time || "";
+        document.getElementById("competition_id").value = game.competition_id || "";
+        document.getElementById("season").value = game.season || "";
+        document.getElementById("round").value = game.round || "";
+        document.getElementById("home_club_name").value = game.home_name || "";
+        document.getElementById("home_club_id").value = game.home_club_id || "";
+        document.getElementById("away_club_name").value = game.away_name || "";
+        document.getElementById("away_club_id").value = game.away_club_id || "";
+        document.getElementById("home_club_goals").value = game.home_club_goals || 0;
+        document.getElementById("away_club_goals").value = game.away_club_goals || 0;
+        document.getElementById("home_club_position").value = game.home_club_position || "";
+        document.getElementById("away_club_position").value = game.away_club_position || "";
+        document.getElementById("stadium").value = game.stadium || "";
+        document.getElementById("referee").value = game.referee || "";
+        document.getElementById("attendance").value = game.attendance || "";
+        document.getElementById("home_club_manager_name").value = game.home_club_manager_name || "";
+        document.getElementById("away_club_manager_name").value = game.away_club_manager_name || "";
+        document.getElementById("home_club_formation").value = game.home_club_formation || "";
+        document.getElementById("away_club_formation").value = game.away_club_formation || "";
+      } catch (err) {
+        console.error("Failed to load match data:", err);
+        document.getElementById("result").textContent = "Failed to load match data";
+        document.getElementById("result").className = "mt-3 text-danger";
+      }
+    }
+
+    window.addEventListener("load", async () => {
+      await loadCompetitions();
+      await loadMatchData();
+      setupClubSearch("home_club_name", "home_club_id", "home-search-results");
+      setupClubSearch("away_club_name", "away_club_id", "away-search-results");
+    });
+  }
+
+  document.getElementById("emf").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    
+    const homeId = document.getElementById("home_club_id").value;
+    const awayId = document.getElementById("away_club_id").value;
+
+    // Validate club IDs are selected
+    if (!homeId) {
+      alert("Please select a home club from the suggestions");
+      return;
+    }
+    if (!awayId) {
+      alert("Please select an away club from the suggestions");
+      return;
+    }
+
+    // Validate clubs are different
+    if (homeId === awayId) {
+      alert("Home and Away clubs must be different");
+      return;
+    }
+
+    const data = {
+      date: document.getElementById("date").value,
+      match_time: document.getElementById("match_time").value,
+      competition_id: document.getElementById("competition_id").value,
+      season: document.getElementById("season").value,
+      round: document.getElementById("round").value,
+      home_club_id: homeId,
+      away_club_id: awayId,
+      home_club_goals: Math.max(0, parseInt(document.getElementById("home_club_goals").value) || 0),
+      away_club_goals: Math.max(0, parseInt(document.getElementById("away_club_goals").value) || 0),
+      home_club_position: document.getElementById("home_club_position").value,
+      away_club_position: document.getElementById("away_club_position").value,
+      stadium: document.getElementById("stadium").value,
+      referee: document.getElementById("referee").value,
+      attendance: document.getElementById("attendance").value,
+      home_club_manager_name: document.getElementById("home_club_manager_name").value,
+      away_club_manager_name: document.getElementById("away_club_manager_name").value,
+      home_club_formation: document.getElementById("home_club_formation").value,
+      away_club_formation: document.getElementById("away_club_formation").value,
+    };
+
+    const resEl = document.getElementById("result");
+    resEl.textContent = "Saving...";
+    resEl.className = "mt-3";
+
+    try {
+      const resp = await fetch(`/api/match/${gameId}/update`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      const body = await resp.json();
+      if (!resp.ok) {
+        resEl.textContent =
+          "Error: " + (body.error || JSON.stringify(body)) +
+          (body.details ? " — " + body.details : "");
+        resEl.className = "mt-3 text-danger";
+        console.error(body);
+        return;
+      }
+      resEl.innerHTML = `✓ Match updated successfully`;
+      resEl.className = "mt-3 text-success";
+      setTimeout(() => {
+        window.location.href = "/games";
+      }, 1500);
+    } catch (err) {
+      resEl.textContent = "Request failed: " + err.message;
+      resEl.className = "mt-3 text-danger";
+      console.error(err);
+    }
+  });
+</script>
+{% endblock %}

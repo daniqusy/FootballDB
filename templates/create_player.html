@@ -1,0 +1,344 @@
+{% extends "base.html" %} {% block body %}
+<div class="container py-4">
+  <h1 class="h4 mb-4">Create Player</h1>
+  <form id="cpf" class="row g-3">
+    
+    <!-- SECTION 1: Basic Info -->
+    <div class="col-12">
+      <h5 class="text-muted small text-uppercase fw-bold" style="letter-spacing: 0.5px;">Basic Information</h5>
+    </div>
+
+    <div class="col-12 col-md-6">
+      <label class="form-label">Full Name *</label>
+      <input class="form-control" id="name" required placeholder="e.g., Cristiano Ronaldo" />
+    </div>
+
+    <div class="col-6 col-md-3">
+      <label class="form-label">First Name</label>
+      <input class="form-control" id="first_name" placeholder="e.g., Cristiano" />
+    </div>
+
+    <div class="col-6 col-md-3">
+      <label class="form-label">Last Name</label>
+      <input class="form-control" id="last_name" placeholder="e.g., Ronaldo" />
+    </div>
+
+    <!-- SECTION 2: Position & Club -->
+    <div class="col-12">
+      <h5 class="text-muted small text-uppercase fw-bold mt-3" style="letter-spacing: 0.5px;">Position & Club</h5>
+    </div>
+
+    <div class="col-6 col-md-3">
+      <label class="form-label">Position</label>
+      <select class="form-select" id="position">
+        <option value="">Select</option>
+        <option value="Attack">Attack</option>
+        <option value="Defender">Defender</option>
+        <option value="GK">GK</option>
+        <option value="Goalkeeper">Goalkeeper</option>
+        <option value="MF">MF</option>
+        <option value="Midfield">Midfield</option>
+      </select>
+    </div>
+
+    <div class="col-6 col-md-3">
+      <label class="form-label">Sub Position</label>
+      <input class="form-control" id="sub_position" placeholder="e.g., Goalkeeper" />
+    </div>
+
+    <div class="col-6 col-md-3">
+      <label class="form-label">Current Club</label>
+      <select class="form-select" id="current_club_id_select">
+        <option value="">Select Club</option>
+      </select>
+    </div>
+
+    <div class="col-6 col-md-3">
+      <label class="form-label small">Or Club ID</label>
+      <input class="form-control" id="current_club_id" type="number" placeholder="Enter ID" />
+    </div>
+
+    <!-- SECTION 3: Market Value -->
+    <div class="col-12">
+      <h5 class="text-muted small text-uppercase fw-bold mt-3" style="letter-spacing: 0.5px;">Market Value</h5>
+    </div>
+
+    <div class="col-6 col-md-3">
+      <label class="form-label">Current Value (EUR)</label>
+      <input class="form-control" id="market_value_eur" type="number" step="1000" placeholder="0" value="0" />
+    </div>
+
+    <div class="col-6 col-md-3">
+      <label class="form-label">Highest Value (EUR)</label>
+      <input class="form-control" id="highest_market_value_eur" type="number" step="1000" placeholder="0" value="0" />
+    </div>
+
+    <!-- SECTION 4: Personal Details -->
+    <div class="col-12">
+      <h5 class="text-muted small text-uppercase fw-bold mt-3" style="letter-spacing: 0.5px;">Personal Details</h5>
+    </div>
+
+    <div class="col-6 col-md-2">
+      <label class="form-label">Height (cm)</label>
+      <input class="form-control" id="height_in_cm" type="number" placeholder="180" />
+    </div>
+
+    <div class="col-6 col-md-2">
+      <label class="form-label">Date of Birth</label>
+      <input class="form-control" id="dob" type="date" />
+    </div>
+
+    <div class="col-6 col-md-2">
+      <label class="form-label">Foot</label>
+      <select class="form-select" id="foot">
+        <option value="">Select</option>
+        <option value="right" selected>Right</option>
+        <option value="left">Left</option>
+        <option value="both">Both</option>
+      </select>
+    </div>
+
+    <div class="col-6 col-md-2">
+      <label class="form-label">Citizenship</label>
+      <input class="form-control" id="country_of_citizenship" placeholder="e.g., England" />
+    </div>
+
+    <div class="col-12 col-md-4">
+      <label class="form-label">City of Birth</label>
+      <input class="form-control" id="city_of_birth" />
+    </div>
+
+    <div class="col-12 col-md-4">
+      <label class="form-label">Country of Birth</label>
+      <input class="form-control" id="country_of_birth" />
+    </div>
+
+    <!-- SECTION 5: Contract & Agent -->
+    <div class="col-12">
+      <h5 class="text-muted small text-uppercase fw-bold mt-3" style="letter-spacing: 0.5px;">Contract & Representation</h5>
+    </div>
+
+    <div class="col-12 col-md-6">
+      <label class="form-label">Agent Name</label>
+      <input class="form-control" id="agent_name" />
+    </div>
+
+    <div class="col-12 col-md-6">
+      <label class="form-label">Contract Expiration</label>
+      <input class="form-control" id="contract_expiration_date" type="date" />
+    </div>
+
+    <!-- SECTION 6: Profile Photo (Bottom) -->
+    <div class="col-12">
+      <h5 class="text-muted small text-uppercase fw-bold mt-4" style="letter-spacing: 0.5px;">Profile Photo</h5>
+    </div>
+
+    <div class="col-12">
+      <div
+        id="dropbox"
+        class="border rounded p-4"
+        style="min-height: 160px; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 12px; background: #f8f9fa;"
+      >
+        <div id="previewWrap" style="max-width: 180px; max-height: 120px;"></div>
+        <div class="text-muted small" id="dropbox-text">
+          Drag & drop image here, or click to choose
+        </div>
+        <input type="file" id="fileInput" accept="image/*" style="display: none;" />
+        <button type="button" id="chooseBtn" class="btn btn-sm btn-outline-primary">Choose Image</button>
+        <button type="button" id="changeBtn" class="btn btn-sm btn-outline-secondary" style="display: none;">Change Image</button>
+        <div id="uploadStatus" class="small text-muted"></div>
+      </div>
+      <input type="hidden" id="image_url" />
+    </div>
+
+    <!-- SECTION 7: Submit -->
+    <div class="col-12 pt-3 border-top">
+      <button type="submit" id="submitBtn" class="btn btn-success btn-lg">Create Player</button>
+      <div id="result" class="mt-3"></div>
+    </div>
+  </form>
+</div>
+
+<script>
+  // Load clubs on page load
+  async function loadClubs() {
+    try {
+      const res = await fetch("/api/clubs");
+      const data = await res.json();
+      const select = document.getElementById("current_club_id_select");
+      if (data.rows) {
+        data.rows.forEach(club => {
+          const opt = document.createElement("option");
+          opt.value = club.club_id;
+          opt.textContent = club.name;
+          select.appendChild(opt);
+        });
+      }
+    } catch (err) {
+      console.error("Failed to load clubs:", err);
+    }
+  }
+
+  // Sync club select to hidden input
+  document.getElementById("current_club_id_select").addEventListener("change", (e) => {
+    document.getElementById("current_club_id").value = e.target.value || "";
+  });
+
+  document.getElementById("current_club_id").addEventListener("change", (e) => {
+    document.getElementById("current_club_id_select").value = e.target.value || "";
+  });
+
+  window.addEventListener("load", loadClubs);
+
+  const dropbox = document.getElementById("dropbox");
+  const fileInput = document.getElementById("fileInput");
+  const chooseBtn = document.getElementById("chooseBtn");
+  const changeBtn = document.getElementById("changeBtn");
+  const previewWrap = document.getElementById("previewWrap");
+  const uploadStatus = document.getElementById("uploadStatus");
+  const dropboxText = document.getElementById("dropbox-text");
+  let selectedFile = null;
+  let imageUploaded = false;
+
+  chooseBtn.addEventListener("click", (e) => {
+    e.preventDefault();
+    fileInput.click();
+  });
+
+  changeBtn.addEventListener("click", (e) => {
+    e.preventDefault();
+    fileInput.value = "";  // Clear previous file
+    fileInput.click();
+  });
+
+  dropbox.addEventListener("click", (e) => {
+    if (e.target === dropbox || e.target === dropboxText) {
+      fileInput.click();
+    }
+  });
+
+  fileInput.addEventListener("change", (e) => {
+    selectedFile = e.target.files[0];
+    if (selectedFile) {
+      showPreview(selectedFile);
+      uploadImage(selectedFile);
+    }
+  });
+
+  dropbox.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    dropbox.classList.add("border-primary", "bg-light");
+  });
+  dropbox.addEventListener("dragleave", () => {
+    dropbox.classList.remove("border-primary", "bg-light");
+  });
+  dropbox.addEventListener("drop", (e) => {
+    e.preventDefault();
+    dropbox.classList.remove("border-primary", "bg-light");
+    const f = e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f) {
+      selectedFile = f;
+      fileInput.files = e.dataTransfer.files;
+      showPreview(selectedFile);
+      uploadImage(selectedFile);
+    }
+  });
+
+  function showPreview(file) {
+    previewWrap.innerHTML = "";
+    if (!file) return;
+    const img = document.createElement("img");
+    img.style.maxWidth = "180px";
+    img.style.maxHeight = "120px";
+    img.style.objectFit = "cover";
+    img.alt = "preview";
+    img.src = URL.createObjectURL(file);
+    previewWrap.appendChild(img);
+  }
+
+  async function uploadImage(file) {
+    uploadStatus.textContent = "Uploading...";
+    uploadStatus.classList.remove("text-success", "text-danger");
+    const fd = new FormData();
+    fd.append("file", file);
+    try {
+      const res = await fetch("/api/upload/player-image", { method: "POST", body: fd });
+      const body = await res.json();
+      if (!res.ok) {
+        uploadStatus.textContent = "Error: " + (body.error || "Unknown error");
+        uploadStatus.classList.add("text-danger");
+        return;
+      }
+      document.getElementById("image_url").value = body.image_url;
+      uploadStatus.textContent = "✓ Uploaded";
+      uploadStatus.classList.add("text-success");
+      imageUploaded = true;
+      chooseBtn.style.display = "none";
+      changeBtn.style.display = "inline-block";
+    } catch (err) {
+      uploadStatus.textContent = "Upload failed: " + err.message;
+      uploadStatus.classList.add("text-danger");
+    }
+  }
+
+  document.getElementById("cpf").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const data = {
+      name: document.getElementById("name").value,
+      first_name: document.getElementById("first_name").value,
+      last_name: document.getElementById("last_name").value,
+      position: document.getElementById("position").value,
+      sub_position: document.getElementById("sub_position").value,
+      current_club_id: document.getElementById("current_club_id").value,
+      market_value_eur: document.getElementById("market_value_eur").value,
+      highest_market_value_eur: document.getElementById("highest_market_value_eur").value,
+      image_url: document.getElementById("image_url").value,
+      height_in_cm: document.getElementById("height_in_cm").value,
+      dob: document.getElementById("dob").value,
+      country_of_citizenship: document.getElementById("country_of_citizenship").value,
+      foot: document.getElementById("foot").value,
+      city_of_birth: document.getElementById("city_of_birth").value,
+      country_of_birth: document.getElementById("country_of_birth").value,
+      agent_name: document.getElementById("agent_name").value,
+      contract_expiration_date: document.getElementById("contract_expiration_date").value,
+    };
+
+    const resEl = document.getElementById("result");
+    resEl.textContent = "Saving...";
+    resEl.className = "mt-3";
+
+    try {
+      const resp = await fetch("/api/player", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      const body = await resp.json();
+      if (!resp.ok) {
+        resEl.textContent =
+          "Error: " + (body.error || JSON.stringify(body)) +
+          (body.details ? " — " + body.details : "");
+        resEl.className = "mt-3 text-danger";
+        console.error(body);
+        return;
+      }
+      resEl.innerHTML = `✓ Created player id: <strong>${body.player_id}</strong>`;
+      resEl.className = "mt-3 text-success";
+      document.getElementById("cpf").reset();
+      previewWrap.innerHTML = "";
+      uploadStatus.textContent = "";
+      uploadStatus.classList.remove("text-success");
+      chooseBtn.style.display = "inline-block";
+      changeBtn.style.display = "none";
+      imageUploaded = false;
+      document.getElementById("foot").value = "right";
+      document.getElementById("market_value_eur").value = "0";
+      document.getElementById("highest_market_value_eur").value = "0";
+    } catch (err) {
+      resEl.textContent = "Request failed: " + err.message;
+      resEl.className = "mt-3 text-danger";
+      console.error(err);
+    }
+  });
+</script>
+{% endblock %}

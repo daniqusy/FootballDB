@@ -1,0 +1,348 @@
+{% extends "base.html" %} {% block body %}
+
+<style>
+  :root {
+    --ink-900: #111827;
+    --ink-700: #374151;
+    --ink-500: #6b7280;
+    --bg-card: #ffffff;
+    --bg-soft: #f8fafc;
+    --brand-500: #2563eb;
+    --brand-600: #1d4ed8;
+  }
+
+  .transfer-table-header {
+    background: linear-gradient(135deg, rgba(37,99,235,0.08), rgba(99,102,241,0.08));
+    border-radius: 0.5rem;
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+    border: 1px solid #eef2f7;
+  }
+
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    align-items: center;
+    margin-bottom: 1rem;
+  }
+
+  .controls .form-select,
+  .controls .form-control {
+    min-width: 150px;
+  }
+
+  .table-wrapper {
+    border-radius: 0.5rem;
+    overflow: hidden;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  }
+
+  .table thead th {
+    background: #f8fafc;
+    font-weight: 600;
+    white-space: nowrap;
+    border-bottom: 2px solid #e5e7eb;
+    vertical-align: middle;
+  }
+
+  .table tbody tr {
+    border-bottom: 1px solid #e5e7eb;
+    transition: background-color 0.15s ease;
+  }
+
+  .table tbody tr:hover {
+    background: #fbfdff;
+  }
+
+  .transfer-row {
+    cursor: pointer;
+  }
+
+  .meta-badge {
+    display: inline-block;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.375rem;
+    background: #ecf2ff;
+    color: var(--brand-600);
+    font-size: 0.8rem;
+    font-weight: 600;
+  }
+
+  .subtle {
+    color: var(--ink-500);
+  }
+
+  .pagination-wrap {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 1.5rem;
+    padding: 1rem;
+    background: var(--bg-soft);
+    border-radius: 0.5rem;
+  }
+
+  .loading-spinner {
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    border: 3px solid #e5e7eb;
+    border-top-color: var(--brand-500);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  .transfer-badge {
+    display: inline-block;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.25rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+  }
+
+  .transfer-in { background: #dcfce7; color: #166534; }
+  .transfer-out { background: #fee2e2; color: #991b1b; }
+
+  @media (max-width: 768px) {
+    .controls { gap: 0.5rem; }
+    .controls .form-select,
+    .controls .form-control {
+      min-width: 120px;
+      font-size: 0.9rem;
+    }
+    .table { font-size: 0.85rem; }
+  }
+</style>
+
+<div class="container py-4">
+  <!-- Header -->
+  <div class="transfer-table-header">
+    <h1 class="h3 mb-3" style="font-weight: 800;">Player Transfers</h1>
+    
+    <!-- Controls -->
+    <div class="controls">
+      <div class="d-flex gap-2 align-items-center">
+        <input 
+          type="text" 
+          id="transfer-search" 
+          class="form-control" 
+          placeholder="Search by player or club..."
+          style="min-width: 250px;"
+        />
+        <button id="transfer-search-btn" class="btn btn-primary btn-sm">Search</button>
+      </div>
+
+      <div class="d-flex gap-2 align-items-center ms-auto">
+        <span class="subtle small" id="transfer-meta"></span>
+        <a href="/transfer/create" class="btn btn-success btn-sm">+ Add Transfer</a>
+        <button id="transfer-refresh" class="btn btn-outline-secondary btn-sm">Refresh</button>
+      </div>
+    </div>
+
+    <!-- Pagination controls -->
+    <div class="controls">
+      <span class="subtle small">Page size:</span>
+      <select id="transfer-page-size" class="form-select form-select-sm" style="min-width: 100px;">
+        <option value="10">10</option>
+        <option value="20" selected>20</option>
+        <option value="50">50</option>
+        <option value="100">100</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- Table -->
+  <div class="table-wrapper">
+    <table class="table table-sm mb-0">
+      <thead>
+        <tr>
+          <th>Transfer ID</th>
+          <th>Player</th>
+          <th>From Club</th>
+          <th>To Club</th>
+          <th>Date</th>
+          <th>Season</th>
+          <th class="text-end">Fee (€)</th>
+          <th class="text-end">Market Value (€)</th>
+          <th class="text-center">Action</th>
+        </tr>
+      </thead>
+      <tbody id="transfer-table-body">
+        <tr>
+          <td colspan="9" class="text-center py-4">
+            <div class="loading-spinner"></div>
+            <div class="mt-2">Loading transfers...</div>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Pagination -->
+  <div class="pagination-wrap">
+    <div class="subtle small" id="transfer-row-count"></div>
+    <nav>
+      <ul class="pagination pagination-sm mb-0">
+        <li class="page-item" id="transfer-prev-wrap">
+          <button class="page-link" id="transfer-prev">← Previous</button>
+        </li>
+        <li class="page-item disabled">
+          <span class="page-link">
+            Page <span id="transfer-current-page">1</span> of <span id="transfer-total-pages">1</span>
+          </span>
+        </li>
+        <li class="page-item" id="transfer-next-wrap">
+          <button class="page-link" id="transfer-next">Next →</button>
+        </li>
+      </ul>
+    </nav>
+  </div>
+</div>
+
+<script>
+  async function J(u) {
+    const r = await fetch(u);
+    return r.json();
+  }
+
+  let currentPage = 1;
+  let pageSize = 20;
+
+  async function loadTransfers(page = 1) {
+    const pageSize = parseInt(document.getElementById("transfer-page-size").value);
+    const search = document.getElementById("transfer-search").value.trim();
+
+    const tbody = document.getElementById("transfer-table-body");
+    tbody.innerHTML = `<tr><td colspan="9" class="text-center py-4"><div class="loading-spinner"></div><div class="mt-2">Loading...</div></td></tr>`;
+
+    try {
+      let url = `/api/transfers/list?page=${page}&page_size=${pageSize}`;
+      if (search) url += `&search=${encodeURIComponent(search)}`;
+
+      const res = await J(url);
+
+      currentPage = page;
+      renderTable(res);
+      updatePagination(res, pageSize);
+      updateMeta(res);
+    } catch (err) {
+      tbody.innerHTML = `<tr><td colspan="9" class="text-center text-danger py-4">Error loading transfers</td></tr>`;
+      console.error(err);
+    }
+  }
+
+  function renderTable(res) {
+    const tbody = document.getElementById("transfer-table-body");
+    const rows = res.rows || [];
+
+    if (rows.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="9" class="text-center py-4 text-muted">No transfers found</td></tr>`;
+      return;
+    }
+
+    tbody.innerHTML = "";
+    rows.forEach(row => {
+      const tr = document.createElement("tr");
+      tr.classList.add("transfer-row");
+      
+      const transferFee = row.transfer_fee ? new Intl.NumberFormat('en-US').format(row.transfer_fee) : "—";
+      const marketValue = row.market_value_in_eur ? new Intl.NumberFormat('en-US').format(row.market_value_in_eur) : "—";
+      
+      tr.innerHTML = `
+        <td><strong>#${row.transfer_id}</strong></td>
+        <td>${row.player_name || "—"}</td>
+        <td>${row.from_club_name || "—"}</td>
+        <td>${row.to_club_name || "—"}</td>
+        <td>${row.transfer_date || "—"}</td>
+        <td>${row.transfer_season || "—"}</td>
+        <td class="text-end">${transferFee}</td>
+        <td class="text-end">${marketValue}</td>
+        <td class="text-center">
+          <a href="/transfer/edit?transfer_id=${row.transfer_id}" class="btn btn-link btn-sm text-decoration-none">Edit</a>
+          <button class="btn btn-link btn-sm text-danger text-decoration-none delete-transfer-btn" data-transfer-id="${row.transfer_id}">Delete</button>
+        </td>
+      `;
+      tbody.appendChild(tr);
+    });
+  }
+
+  function updatePagination(res, pageSize) {
+    const totalTransfers = res.total || res.rows.length;
+    const totalPages = Math.ceil(totalTransfers / pageSize);
+
+    document.getElementById("transfer-current-page").textContent = currentPage;
+    document.getElementById("transfer-total-pages").textContent = totalPages;
+    document.getElementById("transfer-row-count").textContent = `Showing ${(currentPage - 1) * pageSize + 1}–${Math.min(currentPage * pageSize, totalTransfers)} of ${totalTransfers}`;
+
+    document.getElementById("transfer-prev").disabled = currentPage === 1;
+    document.getElementById("transfer-prev-wrap").classList.toggle("disabled", currentPage === 1);
+    document.getElementById("transfer-next").disabled = currentPage === totalPages;
+    document.getElementById("transfer-next-wrap").classList.toggle("disabled", currentPage === totalPages);
+  }
+
+  function updateMeta(res) {
+    const metaEl = document.getElementById("transfer-meta");
+    const ms = res.ms || 0;
+    metaEl.innerHTML = `<span class="meta-badge">${ms}ms</span>`;
+  }
+
+  // Event listeners
+  document.getElementById("transfer-search-btn").addEventListener("click", () => {
+    currentPage = 1;
+    loadTransfers(1);
+  });
+
+  document.getElementById("transfer-search").addEventListener("keypress", (e) => {
+    if (e.key === "Enter") {
+      currentPage = 1;
+      loadTransfers(1);
+    }
+  });
+
+  document.getElementById("transfer-refresh").addEventListener("click", () => loadTransfers(currentPage));
+  document.getElementById("transfer-page-size").addEventListener("change", () => loadTransfers(1));
+
+  document.getElementById("transfer-prev").addEventListener("click", () => {
+    if (currentPage > 1) loadTransfers(currentPage - 1);
+  });
+
+  document.getElementById("transfer-next").addEventListener("click", () => {
+    loadTransfers(currentPage + 1);
+  });
+
+  // Delete transfer handler
+  document.addEventListener("click", async (e) => {
+    if (e.target.classList.contains("delete-transfer-btn")) {
+      const transferId = e.target.getAttribute("data-transfer-id");
+      
+      if (confirm("Are you sure you want to delete this transfer? This action cannot be undone.")) {
+        try {
+          const resp = await fetch(`/api/transfer/${transferId}`, {
+            method: "DELETE",
+            headers: { "Content-Type": "application/json" }
+          });
+          
+          if (resp.ok) {
+            alert("Transfer deleted successfully");
+            loadTransfers(currentPage);
+          } else {
+            const body = await resp.json();
+            alert("Error: " + (body.error || "Failed to delete transfer"));
+          }
+        } catch (err) {
+          alert("Error: " + err.message);
+        }
+      }
+    }
+  });
+
+  // Initial load
+  loadTransfers(1);
+</script>
+
+{% endblock %}

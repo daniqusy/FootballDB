@@ -1,0 +1,316 @@
+{% extends "base.html" %} {% block body %}
+<div class="container py-4">
+  <h1 class="h4 mb-4">Edit Player Transfer</h1>
+  <form id="etf" class="row g-3">
+    
+    <!-- SECTION 1: Player Info -->
+    <div class="col-12">
+      <h5 class="text-muted small text-uppercase fw-bold" style="letter-spacing: 0.5px;">Player Information</h5>
+    </div>
+
+    <div class="col-12 col-md-6">
+      <label class="form-label">Player *</label>
+      <div class="input-group">
+        <input class="form-control" id="player_name" placeholder="Search player..." autocomplete="off" required />
+        <input type="hidden" id="player_id" />
+      </div>
+      <small id="player-search-results" class="form-text text-muted"></small>
+    </div>
+
+    <div class="col-12 col-md-6">
+      <label class="form-label">Transfer Date *</label>
+      <input class="form-control" id="transfer_date" type="date" required />
+    </div>
+
+    <!-- SECTION 2: Clubs -->
+    <div class="col-12">
+      <h5 class="text-muted small text-uppercase fw-bold mt-3" style="letter-spacing: 0.5px;">Transfer Clubs</h5>
+    </div>
+
+    <div class="col-12 col-md-6">
+      <label class="form-label">From Club</label>
+      <div class="input-group">
+        <input class="form-control" id="from_club_name" placeholder="Search club..." autocomplete="off" />
+        <input type="hidden" id="from_club_id" />
+      </div>
+      <small id="from-club-search-results" class="form-text text-muted"></small>
+    </div>
+
+    <div class="col-12 col-md-6">
+      <label class="form-label">To Club *</label>
+      <div class="input-group">
+        <input class="form-control" id="to_club_name" placeholder="Search club..." autocomplete="off" required />
+        <input type="hidden" id="to_club_id" />
+      </div>
+      <small id="to-club-search-results" class="form-text text-muted"></small>
+    </div>
+
+    <!-- SECTION 3: Transfer Details -->
+    <div class="col-12">
+      <h5 class="text-muted small text-uppercase fw-bold mt-3" style="letter-spacing: 0.5px;">Transfer Details</h5>
+    </div>
+
+    <div class="col-12 col-md-4">
+      <label class="form-label">Transfer Season</label>
+      <input class="form-control" id="transfer_season" placeholder="e.g., 2023/2024" />
+    </div>
+
+    <div class="col-12 col-md-4">
+      <label class="form-label">Transfer Fee (€)</label>
+      <input class="form-control" id="transfer_fee" type="number" placeholder="5000000" />
+    </div>
+
+    <div class="col-12 col-md-4">
+      <label class="form-label">Market Value (€)</label>
+      <input class="form-control" id="market_value_in_eur" type="number" placeholder="3000000" />
+    </div>
+
+    <!-- SECTION 4: Submit -->
+    <div class="col-12 pt-3 border-top">
+      <button type="submit" id="submitBtn" class="btn btn-primary btn-lg">Update Transfer</button>
+      <a href="/transfers" class="btn btn-secondary btn-lg">Cancel</a>
+      <div id="result" class="mt-3"></div>
+    </div>
+  </form>
+</div>
+
+<script>
+  // ...search functions same as create...
+  async function searchPlayers(query) {
+    if (!query || query.length < 1) return [];
+    try {
+      const res = await fetch(`/api/players/search?q=${encodeURIComponent(query)}`);
+      const data = await res.json();
+      return data.rows || [];
+    } catch (err) {
+      console.error("Player search failed:", err);
+      return [];
+    }
+  }
+
+  async function searchClubs(query) {
+    if (!query || query.length < 1) return [];
+    try {
+      const res = await fetch(`/api/clubs/search?q=${encodeURIComponent(query)}`);
+      const data = await res.json();
+      return data.rows || [];
+    } catch (err) {
+      console.error("Club search failed:", err);
+      return [];
+    }
+  }
+
+  const urlParams = new URLSearchParams(window.location.search);
+  const transferId = urlParams.get("transfer_id");
+
+  if (!transferId) {
+    document.getElementById("result").textContent = "Error: Transfer ID not provided";
+    document.getElementById("result").className = "mt-3 text-danger";
+  } else {
+    // Load transfer data
+    async function loadTransferData() {
+      try {
+        const res = await fetch(`/api/transfer/${transferId}`);
+        const data = await res.json();
+        const transfer = data.row;
+
+        if (!transfer) {
+          document.getElementById("result").textContent = "Transfer not found";
+          document.getElementById("result").className = "mt-3 text-danger";
+          return;
+        }
+
+        // Fill form fields
+        document.getElementById("player_id").value = transfer.player_id || "";
+        
+        // Format transfer_date properly - ensure it's in YYYY-MM-DD format
+        if (transfer.transfer_date) {
+          const dateObj = new Date(transfer.transfer_date);
+          const formattedDate = dateObj.toISOString().split('T')[0];
+          document.getElementById("transfer_date").value = formattedDate;
+        }
+        
+        document.getElementById("transfer_season").value = transfer.transfer_season || "";
+        document.getElementById("from_club_id").value = transfer.from_club_id || "";
+        document.getElementById("to_club_id").value = transfer.to_club_id || "";
+        document.getElementById("transfer_fee").value = transfer.transfer_fee || "";
+        document.getElementById("market_value_in_eur").value = transfer.market_value_in_eur || "";
+
+        // Fetch player name
+        if (transfer.player_id) {
+          try {
+            const playerRes = await fetch(`/api/player/${transfer.player_id}/profile`);
+            const playerData = await playerRes.json();
+            if (playerData.row && playerData.row.name) {
+              document.getElementById("player_name").value = playerData.row.name;
+            }
+          } catch (err) {
+            console.error("Failed to fetch player name:", err);
+          }
+        }
+
+        // Fetch club names
+        if (transfer.from_club_id) {
+          try {
+            const clubRes = await fetch(`/api/club/${transfer.from_club_id}/profile`);
+            const clubData = await clubRes.json();
+            if (clubData.row && clubData.row.name) {
+              document.getElementById("from_club_name").value = clubData.row.name;
+            }
+          } catch (err) {
+            console.error("Failed to fetch from club name:", err);
+          }
+        }
+
+        if (transfer.to_club_id) {
+          try {
+            const clubRes = await fetch(`/api/club/${transfer.to_club_id}/profile`);
+            const clubData = await clubRes.json();
+            if (clubData.row && clubData.row.name) {
+              document.getElementById("to_club_name").value = clubData.row.name;
+            }
+          } catch (err) {
+            console.error("Failed to fetch to club name:", err);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to load transfer data:", err);
+        document.getElementById("result").textContent = "Failed to load transfer data";
+        document.getElementById("result").className = "mt-3 text-danger";
+      }
+    }
+
+    window.addEventListener("load", loadTransferData);
+  }
+
+  // Player search
+  let playerSearchTimeout;
+  document.getElementById("player_name").addEventListener("input", async (e) => {
+    clearTimeout(playerSearchTimeout);
+    const query = e.target.value.trim();
+    const resultsDiv = document.getElementById("player-search-results");
+
+    if (!query) {
+      resultsDiv.innerHTML = "";
+      return;
+    }
+
+    playerSearchTimeout = setTimeout(async () => {
+      const players = await searchPlayers(query);
+      if (players.length === 0) {
+        resultsDiv.innerHTML = '<span class="text-danger">No players found</span>';
+        return;
+      }
+
+      let html = '<div class="list-group mt-2">';
+      players.forEach(player => {
+        html += `<button type="button" class="list-group-item list-group-item-action player-option" data-id="${player.player_id}" data-name="${player.name}">${player.name}</button>`;
+      });
+      html += '</div>';
+      resultsDiv.innerHTML = html;
+
+      document.querySelectorAll(".player-option").forEach(btn => {
+        btn.addEventListener("click", (e) => {
+          e.preventDefault();
+          document.getElementById("player_name").value = btn.getAttribute("data-name");
+          document.getElementById("player_id").value = btn.getAttribute("data-id");
+          resultsDiv.innerHTML = "";
+        });
+      });
+    }, 300);
+  });
+
+  // Club search function
+  function setupClubSearch(nameInputId, idInputId, resultsId) {
+    let searchTimeout;
+    document.getElementById(nameInputId).addEventListener("input", async (e) => {
+      clearTimeout(searchTimeout);
+      const query = e.target.value.trim();
+      const resultsDiv = document.getElementById(resultsId);
+
+      if (!query) {
+        resultsDiv.innerHTML = "";
+        return;
+      }
+
+      searchTimeout = setTimeout(async () => {
+        const clubs = await searchClubs(query);
+        if (clubs.length === 0) {
+          resultsDiv.innerHTML = '<span class="text-danger">No clubs found</span>';
+          return;
+        }
+
+        let html = '<div class="list-group mt-2">';
+        clubs.forEach(club => {
+          html += `<button type="button" class="list-group-item list-group-item-action club-option" data-id="${club.club_id}" data-name="${club.name}">${club.name}</button>`;
+        });
+        html += '</div>';
+        resultsDiv.innerHTML = html;
+
+        document.querySelectorAll(".club-option").forEach(btn => {
+          btn.addEventListener("click", (e) => {
+            e.preventDefault();
+            document.getElementById(nameInputId).value = btn.getAttribute("data-name");
+            document.getElementById(idInputId).value = btn.getAttribute("data-id");
+            resultsDiv.innerHTML = "";
+          });
+        });
+      }, 300);
+    });
+  }
+
+  setupClubSearch("from_club_name", "from_club_id", "from-club-search-results");
+  setupClubSearch("to_club_name", "to_club_id", "to-club-search-results");
+
+  document.getElementById("etf").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    
+    if (!document.getElementById("player_id").value) {
+      alert("Please select a player from the suggestions");
+      return;
+    }
+    if (!document.getElementById("to_club_id").value) {
+      alert("Please select a destination club from the suggestions");
+      return;
+    }
+
+    const data = {
+      player_id: parseInt(document.getElementById("player_id").value),
+      transfer_date: document.getElementById("transfer_date").value,
+      transfer_season: document.getElementById("transfer_season").value,
+      from_club_id: document.getElementById("from_club_id").value ? parseInt(document.getElementById("from_club_id").value) : null,
+      to_club_id: parseInt(document.getElementById("to_club_id").value),
+      transfer_fee: document.getElementById("transfer_fee").value ? parseInt(document.getElementById("transfer_fee").value) : null,
+      market_value_in_eur: document.getElementById("market_value_in_eur").value ? parseInt(document.getElementById("market_value_in_eur").value) : null,
+    };
+
+    const resEl = document.getElementById("result");
+    resEl.textContent = "Saving...";
+    resEl.className = "mt-3";
+
+    try {
+      const resp = await fetch(`/api/transfer/${transferId}/update`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      const body = await resp.json();
+      if (!resp.ok) {
+        resEl.textContent = "Error: " + (body.error || JSON.stringify(body)) + (body.details ? " — " + body.details : "");
+        resEl.className = "mt-3 text-danger";
+        console.error(body);
+        return;
+      }
+      resEl.innerHTML = `✓ Transfer updated successfully`;
+      resEl.className = "mt-3 text-success";
+      setTimeout(() => {
+        window.location.href = "/transfers";
+      }, 1500);
+    } catch (err) {
+      resEl.textContent = "Request failed: " + err.message;
+      resEl.className = "mt-3 text-danger";
+      console.error(err);
+    }
+  });
+</script>
+{% endblock %}

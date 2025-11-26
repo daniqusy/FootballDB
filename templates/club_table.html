@@ -1,0 +1,420 @@
+{% extends "base.html" %} {% block body %}
+
+<style>
+  :root {
+    --ink-900: #111827;
+    --ink-700: #374151;
+    --ink-500: #6b7280;
+    --bg-card: #ffffff;
+    --bg-soft: #f8fafc;
+    --brand-500: #2563eb;
+    --brand-600: #1d4ed8;
+  }
+
+  .club-table-header {
+    background: linear-gradient(135deg, rgba(37,99,235,0.08), rgba(99,102,241,0.08));
+    border-radius: 0.5rem;
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+    border: 1px solid #eef2f7;
+  }
+
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    align-items: center;
+    margin-bottom: 1rem;
+  }
+
+  .controls .form-select,
+  .controls .form-control {
+    min-width: 150px;
+  }
+
+  .table-wrapper {
+    border-radius: 0.5rem;
+    overflow: hidden;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  }
+
+  .table thead th {
+    background: #f8fafc;
+    font-weight: 600;
+    white-space: nowrap;
+    border-bottom: 2px solid #e5e7eb;
+    vertical-align: middle;
+  }
+
+  .table tbody tr {
+    border-bottom: 1px solid #e5e7eb;
+    transition: background-color 0.15s ease;
+  }
+
+  .table tbody tr:hover {
+    background: #fbfdff;
+  }
+
+  .club-row {
+    cursor: pointer;
+  }
+
+  .club-name {
+    font-weight: 600;
+    color: var(--ink-900);
+    text-decoration: none;
+  }
+
+  .club-name:hover {
+    color: var(--brand-600);
+  }
+
+  .meta-badge {
+    display: inline-block;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.375rem;
+    background: #ecf2ff;
+    color: var(--brand-600);
+    font-size: 0.8rem;
+    font-weight: 600;
+  }
+
+  .subtle {
+    color: var(--ink-500);
+  }
+
+  .pagination-wrap {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 1.5rem;
+    padding: 1rem;
+    background: var(--bg-soft);
+    border-radius: 0.5rem;
+  }
+
+  .loading-spinner {
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    border: 3px solid #e5e7eb;
+    border-top-color: var(--brand-500);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  @media (max-width: 768px) {
+    .controls { gap: 0.5rem; }
+    .controls .form-select,
+    .controls .form-control {
+      min-width: 120px;
+      font-size: 0.9rem;
+    }
+    .table { font-size: 0.85rem; }
+  }
+</style>
+
+<div class="container py-4">
+  <!-- Header -->
+  <div class="club-table-header">
+    <h1 class="h3 mb-3" style="font-weight: 800;">Clubs</h1>
+    
+    <!-- Controls -->
+    <div class="controls">
+      <div class="d-flex gap-2 align-items-center">
+        <input 
+          type="text" 
+          id="club-search" 
+          class="form-control" 
+          placeholder="Search by name..."
+          style="min-width: 200px;"
+        />
+        <button id="club-search-btn" class="btn btn-primary btn-sm">Search</button>
+      </div>
+
+      <div class="d-flex gap-2 align-items-center">
+        <span class="filter-label subtle" style="margin: 0;">Source</span>
+        <select id="club-source" class="form-select form-select-sm" style="min-width: 110px;">
+          <option value="sql">SQL</option>
+          <option value="mongo">Mongo</option>
+        </select>
+      </div>
+
+      <div class="form-check form-switch" id="club-compare-wrap" title="Compare SQL vs Mongo">
+        <input class="form-check-input" type="checkbox" id="club-compare" />
+        <label class="form-check-label small" for="club-compare">Compare</label>
+      </div>
+
+      <div class="d-flex gap-2 align-items-center ms-auto">
+        <a href="/club/create" class="btn btn-success btn-sm">+ Create Club</a>
+      </div>
+    </div>
+
+    <!-- Secondary Controls Row -->
+    <div class="controls">
+      <div class="d-flex gap-2 align-items-center ms-auto">
+        <span class="subtle small" id="club-meta"></span>
+        <button id="club-refresh" class="btn btn-outline-secondary btn-sm">Refresh</button>
+      </div>
+    </div>
+
+    <!-- Pagination controls -->
+    <div class="controls">
+      <span class="subtle small">Page size:</span>
+      <select id="club-page-size" class="form-select form-select-sm" style="min-width: 100px;">
+        <option value="10">10</option>
+        <option value="20" selected>20</option>
+        <option value="50">50</option>
+        <option value="100">100</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- Table -->
+  <div class="table-wrapper">
+    <table class="table table-sm mb-0">
+      <thead>
+        <tr>
+          <th>Club Name</th>
+          <th class="text-center">Players</th>
+          <th class="text-end">Total Market Value</th>
+          <th class="text-center">Avg Age</th>
+          <th class="text-center">Squad Size</th>
+          <th>Stadium</th>
+          <th class="text-center">Source</th>
+          <th class="text-center">Action</th>
+        </tr>
+      </thead>
+      <tbody id="club-table-body">
+        <tr>
+          <td colspan="8" class="text-center py-4">
+            <div class="loading-spinner"></div>
+            <div class="mt-2">Loading clubs...</div>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Pagination -->
+  <div class="pagination-wrap">
+    <div class="subtle small" id="club-row-count"></div>
+    <nav>
+      <ul class="pagination pagination-sm mb-0">
+        <li class="page-item" id="club-prev-wrap">
+          <button class="page-link" id="club-prev">← Previous</button>
+        </li>
+        <li class="page-item disabled">
+          <span class="page-link">
+            Page <span id="club-current-page">1</span> of <span id="club-total-pages">1</span>
+          </span>
+        </li>
+        <li class="page-item" id="club-next-wrap">
+          <button class="page-link" id="club-next">Next →</button>
+        </li>
+      </ul>
+    </nav>
+  </div>
+</div>
+
+<script>
+  async function J(u) {
+    const r = await fetch(u);
+    return r.json();
+  }
+
+  let currentPage = 1;
+  let pageSize = 20;
+
+  function num(x) {
+    return x == null ? "—" : Number(x).toLocaleString();
+  }
+
+  async function loadClubs(page = 1) {
+    const source = document.getElementById("club-source").value;
+    const pageSize = parseInt(document.getElementById("club-page-size").value);
+    const compare = document.getElementById("club-compare").checked;
+    const search = document.getElementById("club-search").value.trim();
+
+    const tbody = document.getElementById("club-table-body");
+    tbody.innerHTML = `<tr><td colspan="8" class="text-center py-4"><div class="loading-spinner"></div><div class="mt-2">Loading...</div></td></tr>`;
+
+    try {
+      let baseUrl = source === 'mongo' ? '/api/mongo/clubs/list' : '/api/clubs/list';
+      let url = `${baseUrl}?page=${page}&page_size=${pageSize}`;
+      if (search) url += `&search=${encodeURIComponent(search)}`;
+
+      const res = await J(url);
+      let compareRes = null;
+
+      if (compare) {
+        const otherBase = source === 'sql' ? '/api/mongo/clubs/list' : '/api/clubs/list';
+        let compareUrl = `${otherBase}?page=${page}&page_size=${pageSize}`;
+        if (search) compareUrl += `&search=${encodeURIComponent(search)}`;
+        compareRes = await J(compareUrl);
+      }
+
+      currentPage = page;
+      renderTable(res, compareRes, source);
+      updatePagination(res, pageSize);
+      updateMeta(res, compareRes, source);
+    } catch (err) {
+      tbody.innerHTML = `<tr><td colspan="8" class="text-center text-danger py-4">Error loading clubs</td></tr>`;
+      console.error(err);
+    }
+  }
+
+  function renderTable(res, compareRes, source) {
+    const tbody = document.getElementById("club-table-body");
+    const rows = res.rows || [];
+
+    if (rows.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="8" class="text-center py-4 text-muted">No clubs found</td></tr>`;
+      return;
+    }
+
+    // If comparing, build a map for quick lookup
+    let compareMap = {};
+    if (compareRes) {
+      (compareRes.rows || []).forEach(r => {
+        compareMap[r.club_id] = r;
+      });
+    }
+
+    tbody.innerHTML = "";
+    rows.forEach(row => {
+      const compareRow = compareRes ? compareMap[row.club_id] : null;
+      let hasDiff = false;
+
+      if (compareRow) {
+        hasDiff = row.name !== compareRow.name ||
+                  row.total_market_value_eur !== compareRow.total_market_value_eur;
+      }
+
+      const marketValue = row.total_market_value_eur ? `€${num(row.total_market_value_eur)}` : "—";
+      const avgAge = row.average_age ? `${row.average_age}y` : "—";
+      const stadium = row.stadium_name || "—";
+      const playerCount = row.player_count || 0;
+      const squadSize = row.squad_size || "—";
+
+      const tr = document.createElement("tr");
+      tr.classList.add("club-row");
+      tr.style.cursor = "pointer";
+      
+      tr.innerHTML = `
+        <td>
+          <a href="/club/roi?club_id=${row.club_id}" class="club-name">${row.name}</a>
+        </td>
+        <td class="text-center">${playerCount}</td>
+        <td class="text-end fw-semibold">${marketValue}</td>
+        <td class="text-center">${avgAge}</td>
+        <td class="text-center">${squadSize}</td>
+        <td class="subtle">${stadium}</td>
+        <td class="text-center">
+          <span class="source-badge source-${source.toLowerCase()}">${source.toUpperCase()}</span>
+          ${hasDiff ? '<span class="diff-indicator" title="Difference detected"></span>' : ''}
+        </td>
+        <td class="text-center">
+          <a href="/club/edit?club_id=${row.club_id}" class="btn btn-link btn-sm text-decoration-none">Edit</a>
+          <button class="btn btn-link btn-sm text-danger text-decoration-none delete-club-btn" data-club-id="${row.club_id}" data-club-name="${row.name}">Delete</button>
+        </td>
+      `;
+      tbody.appendChild(tr);
+    });
+  }
+
+  function updatePagination(res, pageSize) {
+    const totalClubs = res.total || res.rows.length;
+    const totalPages = Math.ceil(totalClubs / pageSize);
+
+    document.getElementById("club-current-page").textContent = currentPage;
+    document.getElementById("club-total-pages").textContent = totalPages;
+    document.getElementById("club-row-count").textContent = `Showing ${(currentPage - 1) * pageSize + 1}–${Math.min(currentPage * pageSize, totalClubs)} of ${totalClubs}`;
+
+    document.getElementById("club-prev").disabled = currentPage === 1;
+    document.getElementById("club-prev-wrap").classList.toggle("disabled", currentPage === 1);
+    document.getElementById("club-next").disabled = currentPage === totalPages;
+    document.getElementById("club-next-wrap").classList.toggle("disabled", currentPage === totalPages);
+  }
+
+  function updateMeta(res, compareRes, source) {
+    const metaEl = document.getElementById("club-meta");
+    const msA = res.ms || 0;
+
+    if (compareRes) {
+      const msB = compareRes.ms || 0;
+      const aLabel = source.toUpperCase();
+      const bLabel = source === 'sql' ? 'Mongo' : 'SQL';
+      const aFaster = msA < msB;
+      metaEl.innerHTML = `
+        <span class="meta-badge ${aFaster ? 'faster' : ''}">${aLabel} ${msA}ms</span>
+        <span style="opacity: 0.5; margin: 0 0.25rem;">|</span>
+        <span class="meta-badge ${!aFaster ? 'faster' : ''}">${bLabel} ${msB}ms</span>
+      `;
+    } else {
+      metaEl.innerHTML = `<span class="meta-badge">${source.toUpperCase()} ${msA}ms</span>`;
+    }
+  }
+
+  // Event listeners
+  document.getElementById("club-search-btn").addEventListener("click", () => {
+    currentPage = 1;
+    loadClubs(1);
+  });
+
+  document.getElementById("club-search").addEventListener("keypress", (e) => {
+    if (e.key === "Enter") {
+      currentPage = 1;
+      loadClubs(1);
+    }
+  });
+
+  document.getElementById("club-refresh").addEventListener("click", () => loadClubs(currentPage));
+  document.getElementById("club-compare").addEventListener("change", () => loadClubs(currentPage));
+  document.getElementById("club-source").addEventListener("change", () => loadClubs(currentPage));
+  document.getElementById("club-page-size").addEventListener("change", () => loadClubs(1));
+
+  document.getElementById("club-prev").addEventListener("click", () => {
+    if (currentPage > 1) loadClubs(currentPage - 1);
+  });
+
+  document.getElementById("club-next").addEventListener("click", () => {
+    loadClubs(currentPage + 1);
+  });
+
+  // Delete club handler
+  document.addEventListener("click", async (e) => {
+    if (e.target.classList.contains("delete-club-btn")) {
+      const clubId = e.target.getAttribute("data-club-id");
+      const clubName = e.target.getAttribute("data-club-name");
+      
+      if (confirm(`Are you sure you want to delete "${clubName}"? This action cannot be undone.`)) {
+        try {
+          const resp = await fetch(`/api/club/${clubId}`, {
+            method: "DELETE",
+            headers: { "Content-Type": "application/json" }
+          });
+          
+          if (resp.ok) {
+            alert("Club deleted successfully");
+            loadClubs(currentPage);
+          } else {
+            const body = await resp.json();
+            alert("Error: " + (body.error || "Failed to delete club"));
+          }
+        } catch (err) {
+          alert("Error: " + err.message);
+        }
+      }
+    }
+  });
+
+  // Initial load
+  loadClubs(1);
+</script>
+
+{% endblock %}

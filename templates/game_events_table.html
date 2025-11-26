@@ -1,0 +1,368 @@
+{% extends "base.html" %} {% block body %}
+
+<style>
+  :root {
+    --ink-900: #111827;
+    --ink-700: #374151;
+    --ink-500: #6b7280;
+    --bg-card: #ffffff;
+    --bg-soft: #f8fafc;
+    --brand-500: #2563eb;
+    --brand-600: #1d4ed8;
+  }
+
+  .event-table-header {
+    background: linear-gradient(135deg, rgba(37,99,235,0.08), rgba(99,102,241,0.08));
+    border-radius: 0.5rem;
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+    border: 1px solid #eef2f7;
+  }
+
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    align-items: center;
+    margin-bottom: 1rem;
+  }
+
+  .controls .form-select,
+  .controls .form-control {
+    min-width: 150px;
+  }
+
+  .table-wrapper {
+    border-radius: 0.5rem;
+    overflow: hidden;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  }
+
+  .table thead th {
+    background: #f8fafc;
+    font-weight: 600;
+    white-space: nowrap;
+    border-bottom: 2px solid #e5e7eb;
+    vertical-align: middle;
+  }
+
+  .table tbody tr {
+    border-bottom: 1px solid #e5e7eb;
+    transition: background-color 0.15s ease;
+  }
+
+  .table tbody tr:hover {
+    background: #fbfdff;
+  }
+
+  .meta-badge {
+    display: inline-block;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.375rem;
+    background: #ecf2ff;
+    color: var(--brand-600);
+    font-size: 0.8rem;
+    font-weight: 600;
+  }
+
+  .event-badge {
+    display: inline-block;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.375rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+  }
+
+  .event-goals { background: #dcfce7; color: #166534; }
+  .event-cards { background: #fef3c7; color: #92400e; }
+  .event-substitutions { background: #dbeafe; color: #1e40af; }
+  .event-shootout { background: #e5e7eb; color: #374151; }
+
+  .subtle {
+    color: var(--ink-500);
+  }
+
+  .pagination-wrap {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 1.5rem;
+    padding: 1rem;
+    background: var(--bg-soft);
+    border-radius: 0.5rem;
+  }
+
+  .loading-spinner {
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    border: 3px solid #e5e7eb;
+    border-top-color: var(--brand-500);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  @media (max-width: 768px) {
+    .controls { gap: 0.5rem; }
+    .controls .form-select,
+    .controls .form-control {
+      min-width: 120px;
+      font-size: 0.9rem;
+    }
+    .table { font-size: 0.85rem; }
+  }
+</style>
+
+<div class="container py-4">
+  <!-- Header -->
+  <div class="event-table-header">
+    <h1 class="h3 mb-3" style="font-weight: 800;">Game Events</h1>
+    
+    <!-- Controls -->
+    <div class="controls">
+      <div class="d-flex gap-2 align-items-center">
+        <input 
+          type="number" 
+          id="event-game-id" 
+          class="form-control" 
+          placeholder="Filter by Game ID"
+        />
+        <button id="event-search-btn" class="btn btn-primary btn-sm">Search</button>
+      </div>
+
+      <div class="d-flex gap-2 align-items-center">
+        <span class="filter-label subtle" style="margin: 0;">Event Type</span>
+        <select id="event-type" class="form-select form-select-sm" style="min-width: 130px;">
+          <option value="">All Types</option>
+          <option value="Goals">Goals</option>
+          <option value="Cards">Cards</option>
+          <option value="Substitutions">Substitutions</option>
+          <option value="Shootout">Shootout</option>
+        </select>
+      </div>
+
+      <div class="d-flex gap-2 align-items-center ms-auto">
+        <span class="subtle small" id="event-meta"></span>
+        <a href="/game-event/create" class="btn btn-success btn-sm">+ Add Event</a>
+        <button id="event-refresh" class="btn btn-outline-secondary btn-sm">Refresh</button>
+      </div>
+    </div>
+
+    <!-- Pagination controls -->
+    <div class="controls">
+      <span class="subtle small">Page size:</span>
+      <select id="event-page-size" class="form-select form-select-sm" style="min-width: 100px;">
+        <option value="10">10</option>
+        <option value="20" selected>20</option>
+        <option value="50">50</option>
+        <option value="100">100</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- Table -->
+  <div class="table-wrapper">
+    <table class="table table-sm mb-0">
+      <thead>
+        <tr>
+          <th>Event ID</th>
+          <th>Game ID</th>
+          <th>Minute</th>
+          <th>Type</th>
+          <th>Club</th>
+          <th>Player</th>
+          <th>Assist/In</th>
+          <th>Description</th>
+          <th class="text-center">Action</th>
+        </tr>
+      </thead>
+      <tbody id="event-table-body">
+        <tr>
+          <td colspan="9" class="text-center py-4">
+            <div class="loading-spinner"></div>
+            <div class="mt-2">Loading events...</div>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Pagination -->
+  <div class="pagination-wrap">
+    <div class="subtle small" id="event-row-count"></div>
+    <nav>
+      <ul class="pagination pagination-sm mb-0">
+        <li class="page-item" id="event-prev-wrap">
+          <button class="page-link" id="event-prev">← Previous</button>
+        </li>
+        <li class="page-item disabled">
+          <span class="page-link">
+            Page <span id="event-current-page">1</span> of <span id="event-total-pages">1</span>
+          </span>
+        </li>
+        <li class="page-item" id="event-next-wrap">
+          <button class="page-link" id="event-next">Next →</button>
+        </li>
+      </ul>
+    </nav>
+  </div>
+</div>
+
+<script>
+  async function J(u) {
+    const r = await fetch(u);
+    return r.json();
+  }
+
+  let currentPage = 1;
+  let pageSize = 20;
+
+  function getEventBadgeClass(type) {
+    const map = {
+      "Goals": "event-goals",
+      "Cards": "event-cards",
+      "Substitutions": "event-substitutions",
+      "Shootout": "event-shootout"
+    };
+    return map[type] || "event-goals";
+  }
+
+  async function loadEvents(page = 1) {
+    const pageSize = parseInt(document.getElementById("event-page-size").value);
+    const gameId = document.getElementById("event-game-id").value;
+    const eventType = document.getElementById("event-type").value;
+
+    const tbody = document.getElementById("event-table-body");
+    tbody.innerHTML = `<tr><td colspan="9" class="text-center py-4"><div class="loading-spinner"></div><div class="mt-2">Loading...</div></td></tr>`;
+
+    try {
+      let url = `/api/game-events/list?page=${page}&page_size=${pageSize}`;
+      if (gameId) url += `&game_id=${gameId}`;
+      if (eventType) url += `&type=${eventType}`;
+
+      const res = await J(url);
+
+      currentPage = page;
+      renderTable(res);
+      updatePagination(res, pageSize);
+      updateMeta(res);
+    } catch (err) {
+      tbody.innerHTML = `<tr><td colspan="9" class="text-center text-danger py-4">Error loading events</td></tr>`;
+      console.error(err);
+    }
+  }
+
+  function renderTable(res) {
+    const tbody = document.getElementById("event-table-body");
+    const rows = res.rows || [];
+
+    if (rows.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="9" class="text-center py-4 text-muted">No events found</td></tr>`;
+      return;
+    }
+
+    tbody.innerHTML = "";
+    rows.forEach(row => {
+      const tr = document.createElement("tr");
+      
+      let assistInfo = "—";
+      if (row.player_assist_id && row.assist_name) {
+        assistInfo = `Assist: ${row.assist_name}`;
+      } else if (row.player_in_id && row.player_in_name) {
+        assistInfo = `In: ${row.player_in_name}`;
+      }
+
+      // Format minute - show "—" if NULL, 0, or negative
+      const minute = (row.minute !== null && row.minute >= 0) ? `${row.minute}'` : "—";
+
+      tr.innerHTML = `
+        <td><strong>#${row.game_event_id}</strong></td>
+        <td>${row.game_id || "—"}</td>
+        <td>${minute}</td>
+        <td><span class="event-badge ${getEventBadgeClass(row.type)}">${row.type || "—"}</span></td>
+        <td>${row.club_name || "—"}</td>
+        <td>${row.player_name || "—"}</td>
+        <td class="subtle small">${assistInfo}</td>
+        <td>${row.description || "—"}</td>
+        <td class="text-center">
+          <a href="/game-event/edit?event_id=${row.game_event_id}" class="btn btn-link btn-sm text-decoration-none">Edit</a>
+          <button class="btn btn-link btn-sm text-danger text-decoration-none delete-event-btn" data-event-id="${row.game_event_id}">Delete</button>
+        </td>
+      `;
+      tbody.appendChild(tr);
+    });
+  }
+
+  function updatePagination(res, pageSize) {
+    const totalEvents = res.total || res.rows.length;
+    const totalPages = Math.ceil(totalEvents / pageSize);
+
+    document.getElementById("event-current-page").textContent = currentPage;
+    document.getElementById("event-total-pages").textContent = totalPages;
+    document.getElementById("event-row-count").textContent = `Showing ${(currentPage - 1) * pageSize + 1}–${Math.min(currentPage * pageSize, totalEvents)} of ${totalEvents}`;
+
+    document.getElementById("event-prev").disabled = currentPage === 1;
+    document.getElementById("event-prev-wrap").classList.toggle("disabled", currentPage === 1);
+    document.getElementById("event-next").disabled = currentPage === totalPages;
+    document.getElementById("event-next-wrap").classList.toggle("disabled", currentPage === totalPages);
+  }
+
+  function updateMeta(res) {
+    const metaEl = document.getElementById("event-meta");
+    const ms = res.ms || 0;
+    metaEl.innerHTML = `<span class="meta-badge">${ms}ms</span>`;
+  }
+
+  // Event listeners
+  document.getElementById("event-search-btn").addEventListener("click", () => {
+    currentPage = 1;
+    loadEvents(1);
+  });
+
+  document.getElementById("event-refresh").addEventListener("click", () => loadEvents(currentPage));
+  document.getElementById("event-type").addEventListener("change", () => loadEvents(1));
+  document.getElementById("event-page-size").addEventListener("change", () => loadEvents(1));
+
+  document.getElementById("event-prev").addEventListener("click", () => {
+    if (currentPage > 1) loadEvents(currentPage - 1);
+  });
+
+  document.getElementById("event-next").addEventListener("click", () => {
+    loadEvents(currentPage + 1);
+  });
+
+  // Delete event handler
+  document.addEventListener("click", async (e) => {
+    if (e.target.classList.contains("delete-event-btn")) {
+      const eventId = e.target.getAttribute("data-event-id");
+      
+      if (confirm("Are you sure you want to delete this event? This action cannot be undone.")) {
+        try {
+          const resp = await fetch(`/api/game-event/${eventId}`, {
+            method: "DELETE",
+            headers: { "Content-Type": "application/json" }
+          });
+          
+          if (resp.ok) {
+            alert("Event deleted successfully");
+            loadEvents(currentPage);
+          } else {
+            const body = await resp.json();
+            alert("Error: " + (body.error || "Failed to delete event"));
+          }
+        } catch (err) {
+          alert("Error: " + err.message);
+        }
+      }
+    }
+  });
+
+  // Initial load
+  loadEvents(1);
+</script>
+
+{% endblock %}
