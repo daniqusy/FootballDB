@@ -25,6 +25,10 @@ def ensure_indexes():
     mdb.player_seasons.create_index([("player_id", 1), ("competition_id", 1), ("season", -1)])
     mdb.transfers.create_index([("player_id", 1), ("transfer_date", -1)])
     mdb.transfers.create_index([("to.club_id", 1), ("transfer_season", -1)])
+    # Transfers additional indexes to support Mongo list search
+    mdb.transfers.create_index([("player_name", 1)])
+    mdb.transfers.create_index([("from.name", 1)])
+    mdb.transfers.create_index([("to.name", 1)])
     # Players collection indexes (added for profile + market compare queries)
     mdb.players.create_index([("player_id", 1)], unique=True)
     mdb.players.create_index([("market_value_eur", -1)])
@@ -37,6 +41,12 @@ def ensure_indexes():
     mdb.clubs.create_index([("club_id", 1)], unique=True)
     mdb.clubs.create_index([("name", 1)])
     mdb.clubs.create_index([("total_market_value_eur", -1)])
+    # Appearances collection indexes (for Mongo appearances list)
+    if "appearances" in mdb.list_collection_names():
+        mdb.appearances.create_index([("game_id", -1), ("date", -1)])
+        mdb.appearances.create_index([("player_id", 1)])
+        mdb.appearances.create_index([("player_name", 1)])
+        mdb.appearances.create_index([("club_name", 1)])
 
 def fetchall(cur, q, args=None):
     cur.execute(q, args or ())
@@ -104,7 +114,8 @@ def upsert_games(batch=1000):
     with sql.cursor() as cur:
         for g in games:
             evs = fetchall(cur, r"""
-              SELECT ge.minute,
+              SELECT ge.game_event_id,
+                     ge.minute,
                      ge.type,
                      ge.club_id,
                      ge.player_id,
@@ -221,22 +232,28 @@ def upsert_transfers(batch=2000):
             t.from_club_id, COALESCE(fc.name,'') AS from_name,
             t.to_club_id,   COALESCE(tc.name,'') AS to_name,
             t.transfer_fee,
-            t.market_value_in_eur
+            t.market_value_in_eur,
+            p.name AS player_name
           FROM transfer t
           LEFT JOIN club fc ON fc.club_id=t.from_club_id
           LEFT JOIN club tc ON tc.club_id=t.to_club_id
+          JOIN player p ON p.player_id = t.player_id
         """)
     ops, n = [], 0
     for r in rows:
         doc = sanitize({
           "_id": r["transfer_id"],
           "player_id": r["player_id"],
+          "player_name": r.get("player_name"),
           "transfer_date": r["transfer_date"],
           "transfer_season": r["transfer_season"],
           "from": { "club_id": r["from_club_id"], "name": r["from_name"] },
           "to":   { "club_id": r["to_club_id"],   "name": r["to_name"] },
           "transfer_fee": r["transfer_fee"],
           "market_value_in_eur": r["market_value_in_eur"],
+          # Duplicated flattened fields for fast Mongo list projection (avoid deep lookups)
+          "from_club_name": r["from_name"],
+          "to_club_name": r["to_name"],
           "updated_at": int(time.time())
         })
         ops.append(UpdateOne({"_id": doc["_id"]}, {"$set": doc}, upsert=True))
@@ -325,6 +342,47 @@ def upsert_clubs(batch=2000):
         mdb.clubs.bulk_write(ops); n += len(ops)
     print(f"clubs upserts: {n} in {time.time()-t0:.1f}s")
 
+# --- ETL: Appearances (denormalized list for Mongo list endpoint) ---
+def upsert_appearances(batch=5000):
+    print("ETL appearances...")
+    t0 = time.time()
+    with sql.cursor() as cur:
+        rows = fetchall(cur, r"""
+          SELECT a.appearance_id, a.game_id, a.player_id, a.player_club_id,
+                 a.player_current_club_id, DATE_FORMAT(a.date,'%%Y-%%m-%%d') AS date,
+                 a.yellow_cards, a.red_cards, a.goals, a.assists, a.minutes_played,
+                 p.name AS player_name, c.name AS club_name
+          FROM appearance a
+          LEFT JOIN player p ON p.player_id = a.player_id
+          LEFT JOIN club c ON c.club_id = a.player_club_id
+        """)
+    ops, n = [], 0
+    for r in rows:
+        doc = sanitize({
+          "_id": r["appearance_id"],
+          "appearance_id": r["appearance_id"],
+          "game_id": r["game_id"],
+          "player_id": r["player_id"],
+          "player_club_id": r.get("player_club_id"),
+          "player_current_club_id": r.get("player_current_club_id"),
+          "date": r.get("date"),
+          "yellow_cards": r.get("yellow_cards"),
+          "red_cards": r.get("red_cards"),
+          "goals": r.get("goals"),
+          "assists": r.get("assists"),
+          "minutes_played": r.get("minutes_played"),
+          "player_name": r.get("player_name"),
+          "club_name": r.get("club_name"),
+          "updated_at": int(time.time())
+        })
+        ops.append(UpdateOne({"_id": doc["_id"]}, {"$set": doc}, upsert=True))
+        if len(ops) >= batch:
+            mdb.appearances.bulk_write(ops); n += len(ops); ops = []
+    if ops:
+        mdb.appearances.bulk_write(ops); n += len(ops)
+    print(f"appearances upserts: {n} in {time.time()-t0:.1f}s")
+
+
 def main():
     ensure_indexes()
     ap = argparse.ArgumentParser()
@@ -333,15 +391,17 @@ def main():
     ap.add_argument("--transfers", action="store_true")
     ap.add_argument("--players", action="store_true")
     ap.add_argument("--clubs", action="store_true")
+    ap.add_argument("--appearances", action="store_true")
     args = ap.parse_args()
 
     # If no specific flag, run all
-    if not (args.games or args.playerseasons or args.transfers or args.players or args.clubs):
+    if not (args.games or args.playerseasons or args.transfers or args.players or args.clubs or args.appearances):
         upsert_games()
         upsert_player_seasons()
         upsert_transfers()
         upsert_players()
         upsert_clubs()
+        upsert_appearances()
         return
 
     if args.games: upsert_games()
@@ -349,6 +409,7 @@ def main():
     if args.transfers: upsert_transfers()
     if args.players: upsert_players()
     if args.clubs: upsert_clubs()
+    if args.appearances: upsert_appearances()
 
 if __name__ == "__main__":
-    main()
+  main()

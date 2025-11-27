@@ -1,8 +1,10 @@
 import os, time
+from datetime import datetime
 from flask import Flask, render_template, request, jsonify, send_from_directory
 from dotenv import load_dotenv
 import pymysql
 from pymongo import MongoClient
+from pymongo import ReturnDocument
 
 load_dotenv()
 app = Flask(__name__)
@@ -154,41 +156,6 @@ def api_player_form():
     """
     rows, ms = run_sql(sql, (player_id, comp, season, n))
     return jsonify(dict(ms=ms, rows=rows))
-
-# Mongo: Player form (latest N matches for player in competition-season)
-@app.get("/api/mongo/player/form")
-def api_mongo_player_form():
-    try:
-        player_id = int(request.args.get("player_id"))
-    except (TypeError, ValueError):
-        return jsonify(dict(error="invalid player_id")), 400
-    comp = request.args.get("competition_id")
-    season = request.args.get("season")
-    n = int(request.args.get("n", 5))
-    if not comp or not season:
-        return jsonify(dict(error="competition_id and season required")), 400
-
-    def _q(db):
-        doc = db.player_seasons.find_one({"_id": f"{player_id}_{comp}_{season}"}) or {}
-        latest = doc.get("latest_matches", [])
-        # Slice to requested n
-        rows_out = []
-        for m in latest[:n]:
-            rows_out.append({
-                "game_id": m.get("game_id"),
-                "date_str": m.get("date"),
-                "minutes_played": m.get("min"),
-                "goals": m.get("g"),
-                "assists": m.get("a"),
-                "player_club_id": m.get("player_club_id"),
-                "home_club_id": m.get("home_club_id"),
-                "home_name": m.get("home_name"),
-                "away_club_id": m.get("away_club_id"),
-                "away_name": m.get("away_name")
-            })
-        return rows_out
-    rows, ms = run_mongo(_q)
-    return jsonify(dict(ms=ms, rows=rows, source="mongo"))
 
 # Top scorers by league-season with pagination
 @app.route("/top-scorers")
@@ -863,6 +830,20 @@ def api_club_seasons(club_id):
     rows, ms = run_sql(sql, (club_id,))
     return jsonify(dict(ms=ms, rows=rows))
 
+# Mongo: Seasons a club bought players
+@app.get("/api/mongo/clubs/<int:club_id>/seasons")
+def api_mongo_club_seasons(club_id):
+    def _q(db):
+        rows = db.transfers.distinct("transfer_season", {"to.club_id": club_id})
+        rows = [r for r in rows if r]
+        try:
+            rows.sort(reverse=True)
+        except Exception:
+            pass
+        return [{"season": r} for r in rows]
+    rows, ms = run_mongo(_q)
+    return jsonify(dict(ms=ms, rows=rows, source="mongo"))
+
 # Club search
 @app.get("/api/clubs/search")
 def api_clubs_search():
@@ -904,6 +885,134 @@ def api_club_roi():
         name_map = {p["player_id"]: p["name"] for p in plist}
         for r in rows: r["player_name"] = name_map.get(r["player_id"])
     return jsonify(dict(ms=ms, rows=rows))
+
+# Mongo: Club transfer ROI data (basic from transfers collection)
+@app.get("/api/mongo/club/roi")
+def api_mongo_club_roi():
+    club_id = int(request.args.get("club_id"))
+    season  = request.args.get("season")
+    sort_by = request.args.get("sort_by","post_minutes")
+    order   = -1 if request.args.get("order","desc").lower()=="desc" else 1
+    debug = request.args.get("debug") == "1"
+
+    def _q(db):
+        flt = {"to.club_id": club_id}
+        if season:
+            flt["transfer_season"] = season
+        transfers = list(db.transfers.find(flt, {
+            "_id": 1,
+            "player_id": 1,
+            "player_name": 1,
+            "transfer_fee": 1,
+            "market_value_in_eur": 1,
+            "transfer_season": 1,
+            "transfer_date": 1,
+        }))
+        transfers = [t for t in transfers if (t.get("transfer_fee") or 0) > 0]
+        if not transfers:
+            return []
+
+        player_ids = [t.get("player_id") for t in transfers if t.get("player_id") is not None]
+        apps_by_player = {}
+        game_ids = set()
+        if player_ids:
+            ap_cur = db.appearances.find({
+                "player_id": {"$in": player_ids},
+                "$or": [
+                    {"player_club_id": club_id},
+                    {"player_current_club_id": club_id}
+                ]
+            }, {
+                "game_id": 1,
+                "player_id": 1,
+                "minutes_played": 1,
+                "goals": 1,
+                "assists": 1,
+                "date": 1,
+            })
+            for ap in ap_cur:
+                pid = ap.get("player_id")
+                if pid is None:
+                    continue
+                apps_by_player.setdefault(pid, []).append(ap)
+                gid = ap.get("game_id")
+                if gid is not None:
+                    game_ids.add(gid)
+        game_seasons = {}
+        if game_ids:
+            for gdoc in db.games.find({"_id": {"$in": list(game_ids)}}, {"_id":1, "season":1}):
+                game_seasons[gdoc.get("_id")] = gdoc.get("season")
+
+        from datetime import datetime
+        def parse_date(s):
+            try:
+                return datetime.strptime(s, "%Y-%m-%d").date()
+            except Exception:
+                return None
+
+        rows = []
+        for t in transfers:
+            pid = t.get("player_id")
+            fee = t.get("transfer_fee") or 0
+            tdate = parse_date(t.get("transfer_date"))
+            aps = apps_by_player.get(pid, [])
+            mins = goals = assists = 0
+            # Post-transfer pass
+            for ap in aps:
+                gid = ap.get("game_id")
+                if season and game_seasons.get(gid) != season:
+                    continue
+                ap_date = parse_date(ap.get("date"))
+                if tdate and ap_date and ap_date < tdate:
+                    continue
+                mins += int(ap.get("minutes_played") or 0)
+                goals += int(ap.get("goals") or 0)
+                assists += int(ap.get("assists") or 0)
+            # Fallback include whole season if still zero
+            if mins == 0 and aps:
+                mins = goals = assists = 0
+                for ap in aps:
+                    gid = ap.get("game_id")
+                    if season and game_seasons.get(gid) != season:
+                        continue
+                    mins += int(ap.get("minutes_played") or 0)
+                    goals += int(ap.get("goals") or 0)
+                    assists += int(ap.get("assists") or 0)
+            contrib = goals + assists
+            eur_per_minutes = round(fee / mins, 3) if mins else None
+            eur_per_contrib = round(fee / contrib, 3) if contrib else None
+            row = {
+                "player_id": pid,
+                "player_name": t.get("player_name"),
+                "transfer_season": t.get("transfer_season"),
+                "transfer_fee": fee,
+                "market_value_in_eur": t.get("market_value_in_eur"),
+                "post_minutes": mins,
+                "post_goals": goals,
+                "post_assists": assists,
+                "eur_per_minutes": eur_per_minutes,
+                "eur_per_contrib": eur_per_contrib,
+            }
+            if debug:
+                row["_debug_apps"] = len(aps)
+                row["_debug_transfer_date"] = t.get("transfer_date")
+            rows.append(row)
+
+        key_map = {
+            "transfer_fee": lambda r: r.get("transfer_fee") or 0,
+            "market_value_in_eur": lambda r: r.get("market_value_in_eur") or 0,
+            "post_minutes": lambda r: r.get("post_minutes") or -1,
+            "post_goals": lambda r: r.get("post_goals") or -1,
+            "post_assists": lambda r: r.get("post_assists") or -1,
+            "eur_per_minutes": lambda r: r.get("eur_per_minutes") or -1,
+            "eur_per_contrib": lambda r: r.get("eur_per_contrib") or -1,
+        }
+        key_fn = key_map.get(sort_by, key_map["transfer_fee"])
+        rows.sort(key=key_fn, reverse=(order==-1))
+        return rows
+
+    rows, ms = run_mongo(_q)
+    return jsonify(dict(ms=ms, rows=rows, source="mongo", debug=debug))
 
 # Competitions list
 @app.get("/api/competitions")
@@ -2121,6 +2230,74 @@ def api_games_list():
     rows, ms, perf = run_sql_ex(sql, tuple(params))
     return jsonify(dict(ms=ms, rows=rows, page=page, page_size=page_size, total=total, perf=perf))
 
+# Mongo: Games list
+@app.get("/api/mongo/games/list")
+def api_mongo_games_list():
+    page = max(int(request.args.get("page", 1)), 1)
+    page_size = min(max(int(request.args.get("page_size", 20)), 1), 100)
+    date = request.args.get("date", "").strip()
+    competition = request.args.get("competition_id", "").strip()
+    season = request.args.get("season", "").strip()
+    skip = (page - 1) * page_size
+
+    def _q(db):
+        # Build query filters
+        query = {}
+        if date:
+            query["date"] = date
+        if competition:
+            query["competition_id"] = competition
+        if season:
+            query["season"] = season
+        total = db.games.count_documents(query)
+
+        # We project nested home/away subdocuments if present. Older ETL versions flattened names/goals.
+        projection = {
+            "game_id": 1, "date": 1, "competition_id": 1, "competition_name": 1,
+            "round": 1, "season": 1,
+            # nested structure
+            "home": 1, "away": 1,
+            # fallback flat fields (if any legacy docs exist)
+            "home_club_id": 1, "away_club_id": 1,
+            "home_club_goals": 1, "away_club_goals": 1,
+            "home_club_name": 1, "away_club_name": 1,
+            "stadium": 1, "attendance": 1
+        }
+        cur = db.games.find(query, projection).sort("date", -1).skip(skip).limit(page_size)
+        out = []
+        for g in cur:
+            home = g.get("home") or {}
+            away = g.get("away") or {}
+            # Determine IDs
+            home_id = home.get("club_id") or g.get("home_club_id")
+            away_id = away.get("club_id") or g.get("away_club_id")
+            # Names fallback to IDs
+            home_name = home.get("name") or g.get("home_club_name") or home_id
+            away_name = away.get("name") or g.get("away_club_name") or away_id
+            # Goals fallback to flat fields
+            home_goals = home.get("goals") if home.get("goals") is not None else g.get("home_club_goals")
+            away_goals = away.get("goals") if away.get("goals") is not None else g.get("away_club_goals")
+
+            out.append({
+                "game_id": g.get("game_id"),
+                "date_str": g.get("date"),
+                "competition_id": g.get("competition_id"),
+                "league_name": g.get("competition_name"),
+                "round": g.get("round"),
+                "season": g.get("season"),
+                "home_club_id": home_id,
+                "home_name": home_name,
+                "away_club_id": away_id,
+                "away_name": away_name,
+                "home_club_goals": home_goals,
+                "away_club_goals": away_goals,
+                "stadium": g.get("stadium"),
+                "attendance": g.get("attendance")
+            })
+        return out, total
+    (rows, total), ms = run_mongo(_q)
+    return jsonify(dict(ms=ms, rows=rows, page=page, page_size=page_size, total=total, source="mongo"))
+
 # Delete match
 @app.delete("/api/match/<int:game_id>")
 def api_delete_match(game_id):
@@ -2144,6 +2321,16 @@ def api_games_seasons():
     """
     rows, ms = run_sql(sql)
     return jsonify(dict(ms=ms, rows=rows))
+
+# Mongo: Games seasons (distinct seasons from games collection)
+@app.get("/api/mongo/games/seasons")
+def api_mongo_games_seasons():
+    def _q(db):
+        cur = db.games.find({}, {"season": 1})
+        seasons = sorted({d.get("season") for d in cur if d.get("season")}, reverse=True)
+        return [{"season": s} for s in seasons]
+    rows, ms = run_mongo(_q)
+    return jsonify(dict(ms=ms, rows=rows, source="mongo"))
 
 @app.route("/appearances")
 def appearances_page():
@@ -2194,6 +2381,147 @@ def api_appearances_list():
 
     rows, ms, perf = run_sql_ex(sql, tuple(params))
     return jsonify(dict(ms=ms, rows=rows, page=page, page_size=page_size, total=total, perf=perf))
+
+# Mongo: Appearances list (optional read model)
+@app.get("/api/mongo/appearances/list")
+def api_mongo_appearances_list():
+    page = max(int(request.args.get("page", 1)), 1)
+    page_size = min(max(int(request.args.get("page_size", 20)), 1), 100)
+    search = request.args.get("search", "").strip()
+    skip = (page - 1) * page_size
+    debug_flag = request.args.get("debug") == "1"
+
+    def _q(db):
+        # Support multiple possible collection names for robustness.
+        coll_name = None
+        for cand in ["appearances", "appearance", "player_appearances"]:
+            if cand in db.list_collection_names():
+                coll_name = cand
+                break
+        if not coll_name:
+            return [], 0, {"reason": "no_collection"}
+        coll = db[coll_name]
+
+        # Build search query with synonym matching for player/club names
+        query = {}
+        if search:
+            or_clauses = []
+            # Numeric game_id match
+            try:
+                g_id = int(search)
+                or_clauses.append({"game_id": g_id})
+                or_clauses.append({"gameId": g_id})
+            except ValueError:
+                pass
+            regex_clause = {"$regex": search, "$options": "i"}
+            for name_field in ["player_name", "name", "playerName"]:
+                or_clauses.append({name_field: regex_clause})
+            for club_field in ["club_name", "club", "team_name", "clubName"]:
+                or_clauses.append({club_field: regex_clause})
+            if or_clauses:
+                query["$or"] = or_clauses
+
+        total = coll.count_documents(query)
+
+        # Determine sort field – prefer 'date', else fallback to other date synonyms.
+        sort_field = None
+        for sf in ["date", "match_date", "date_str", "game_date", "transfer_date"]:
+            if coll.find_one({sf: {"$exists": True}}):
+                sort_field = sf
+                break
+        if not sort_field:
+            sort_field = "appearance_id"  # fallback deterministic ordering
+
+        projection = {
+            "appearance_id": 1,
+            "game_id": 1,
+            "gameId": 1,
+            "match_id": 1,
+            "player_id": 1,
+            "playerId": 1,
+            "player_club_id": 1,
+            "club_id": 1,
+            "clubId": 1,
+            "player_current_club_id": 1,
+            "date": 1,
+            "date_str": 1,
+            "match_date": 1,
+            "game_date": 1,
+            "yellow_cards": 1,
+            "yellow": 1,
+            "yc": 1,
+            "red_cards": 1,
+            "red": 1,
+            "rc": 1,
+            "goals": 1,
+            "goal": 1,
+            "goals_scored": 1,
+            "assists": 1,
+            "assist": 1,
+            "minutes_played": 1,
+            "minutes": 1,
+            "mins": 1,
+            "time_played": 1,
+            "player_name": 1,
+            "name": 1,
+            "playerName": 1,
+            "club_name": 1,
+            "club": 1,
+            "team_name": 1,
+            "clubName": 1,
+            "stats": 1
+        }
+
+        cur = coll.find(query, projection).sort(sort_field, -1).skip(skip).limit(page_size)
+        rows = []
+        first_doc_keys = None
+        for d in cur:
+            if first_doc_keys is None:
+                first_doc_keys = list(d.keys())
+            stats = d.get("stats") or {}
+            def pick(*keys):
+                for k in keys:
+                    v = d.get(k)
+                    if v is not None and v != "":
+                        return v
+                return None
+            appearance_id = pick("appearance_id", "_id")
+            game_id = pick("game_id", "gameId", "match_id")
+            player_id = pick("player_id", "playerId")
+            player_club_id = pick("player_club_id", "club_id", "clubId")
+            player_current_club_id = d.get("player_current_club_id")
+            date_val = pick("date", "date_str", "match_date", "game_date")
+            yellow = pick("yellow_cards", "yellow", "yc") or stats.get("yellow_cards")
+            red = pick("red_cards", "red", "rc") or stats.get("red_cards")
+            goals = pick("goals", "goal", "goals_scored") or stats.get("goals")
+            assists = pick("assists", "assist") or stats.get("assists")
+            minutes_played = pick("minutes_played", "minutes", "mins", "time_played") or stats.get("minutes_played")
+            player_name = pick("player_name", "name", "playerName")
+            club_name = pick("club_name", "club", "team_name", "clubName")
+            rows.append({
+                "appearance_id": appearance_id,
+                "game_id": game_id,
+                "player_id": player_id,
+                "player_club_id": player_club_id,
+                "player_current_club_id": player_current_club_id,
+                "date": date_val,
+                "yellow_cards": yellow,
+                "red_cards": red,
+                "goals": goals,
+                "assists": assists,
+                "minutes_played": minutes_played,
+                "player_name": player_name,
+                "club_name": club_name
+            })
+        meta = {"collection": coll_name, "sort_field": sort_field}
+        if debug_flag:
+            meta["first_doc_keys"] = first_doc_keys
+        return rows, total, meta
+    (rows, total, meta), ms = run_mongo(_q)
+    payload = dict(ms=ms, rows=rows, page=page, page_size=page_size, total=total, source="mongo")
+    if debug_flag:
+        payload["meta"] = meta
+    return jsonify(payload)
 
 # Get single appearance
 @app.get("/api/appearance/<appearance_id>")
@@ -2362,6 +2690,45 @@ def api_transfers_list():
     rows, ms, perf = run_sql_ex(sql, tuple(params))
     return jsonify(dict(ms=ms, rows=rows, page=page, page_size=page_size, total=total, perf=perf))
 
+# Mongo: transfers list with pagination & search
+@app.get("/api/mongo/transfers/list")
+def api_mongo_transfers_list():
+    page = max(int(request.args.get("page", 1)), 1)
+    page_size = min(max(int(request.args.get("page_size", 20)), 1), 100)
+    search = request.args.get("search", "").strip()
+    offset = (page - 1) * page_size
+
+    def _q(db):
+        flt = {}
+        if search:
+            regex = {"$regex": search, "$options": "i"}
+            flt["$or"] = [
+                {"player_name": regex},
+                {"from.name": regex},
+                {"to.name": regex},
+            ]
+        total = db.transfers.count_documents(flt)
+        docs = db.transfers.find(flt).sort("transfer_date", -1).skip(offset).limit(page_size)
+        rows = []
+        for d in docs:
+            rows.append({
+                "transfer_id": d.get("_id"),
+                "player_id": d.get("player_id"),
+                "player_name": d.get("player_name"),
+                "from_club_id": (d.get("from") or {}).get("club_id"),
+                "from_club_name": d.get("from_club_name") or (d.get("from") or {}).get("name"),
+                "to_club_id": (d.get("to") or {}).get("club_id"),
+                "to_club_name": d.get("to_club_name") or (d.get("to") or {}).get("name"),
+                "transfer_date": d.get("transfer_date"),
+                "transfer_season": d.get("transfer_season"),
+                "transfer_fee": d.get("transfer_fee"),
+                "market_value_in_eur": d.get("market_value_in_eur"),
+            })
+        return {"rows": rows, "total": total}
+
+    data, ms = run_mongo(_q)
+    return jsonify(dict(ms=ms, source="mongo", rows=data["rows"], total=data["total"], page=page, page_size=page_size))
+
 # Get single transfer
 @app.get("/api/transfer/<int:transfer_id>")
 def api_transfer_get(transfer_id):
@@ -2485,6 +2852,17 @@ def api_transfer_delete(transfer_id):
     except Exception as err:
         return jsonify({"error": str(err), "details": repr(err)}), 500
 
+# Mongo: delete transfer document
+@app.delete("/api/mongo/transfer/<int:transfer_id>")
+def api_mongo_transfer_delete(transfer_id):
+    def _del(db):
+        res = db.transfers.delete_one({"_id": transfer_id})
+        return {"deleted": res.deleted_count}
+    data, ms = run_mongo(_del)
+    if data.get("deleted") == 0:
+        return jsonify({"error": "Transfer not found", "ms": ms, "source": "mongo"}), 404
+    return jsonify({"success": True, "transfer_id": transfer_id, "ms": ms, "source": "mongo"})
+
 # Game Events routes
 @app.route("/game-events")
 def game_events_page():
@@ -2544,6 +2922,221 @@ def api_game_events_list():
 
     rows, ms, perf = run_sql_ex(sql, tuple(params))
     return jsonify(dict(ms=ms, rows=rows, page=page, page_size=page_size, total=total, perf=perf))
+
+# Mongo: Game events list (unwinds events embedded in games collection)
+@app.get("/api/mongo/game-events/list")
+def api_mongo_game_events_list():
+    page = max(int(request.args.get("page", 1)), 1)
+    page_size = min(max(int(request.args.get("page_size", 20)), 1), 100)
+    game_id = request.args.get("game_id", "").strip()
+    event_type = request.args.get("type", "").strip()
+    skip = (page - 1) * page_size
+
+    # Map UI event categories to underlying type predicates
+    category_filters = {
+        "Goals": lambda t: "goal" in (t or "").lower(),
+        "Cards": lambda t: "card" in (t or "").lower(),
+        "Substitutions": lambda t: "sub" in (t or "").lower(),
+        "Shootout": lambda t: "shoot" in (t or "").lower() or "pen" in (t or "").lower(),
+    }
+
+    def _q(db):
+        if "games" not in db.list_collection_names():
+            return [], 0
+        base_query = {}
+        if game_id:
+            try:
+                base_query["_id"] = int(game_id)
+            except ValueError:
+                base_query["_id"] = game_id  # if string IDs ever used
+
+        # Fetch matching games first (small subset if game_id provided)
+        cur = db.games.find(base_query, {"_id":1, "date":1, "home":1, "away":1, "events":1})
+        all_events = []
+        for g in cur:
+            gid = g.get("_id")
+            home = g.get("home") or {}
+            away = g.get("away") or {}
+            home_id = home.get("club_id")
+            away_id = away.get("club_id")
+            home_name = home.get("name")
+            away_name = away.get("name")
+            events = g.get("events") or []
+            for idx, ev in enumerate(events):
+                t = ev.get("type") or ev.get("event_type")
+                # Category filter
+                if event_type and event_type in category_filters:
+                    if not category_filters[event_type](t):
+                        continue
+                club_id = ev.get("club_id")
+                # Resolve club name using home/away context
+                club_name = None
+                if club_id == home_id:
+                    club_name = home_name
+                elif club_id == away_id:
+                    club_name = away_name
+                # Assist / sub naming
+                assist_name = ev.get("assist_name")
+                player_in_name = ev.get("player_in_name")
+                row = {
+                    # Synthesize stable event id (game_event_id missing in embedded doc)
+                    "game_event_id": ev.get("game_event_id") or f"{gid}_{idx}",
+                    "game_id": gid,
+                    "minute": ev.get("minute"),
+                    "type": t,
+                    "club_id": club_id,
+                    "club_name": club_name,
+                    "player_id": ev.get("player_id"),
+                    "player_name": ev.get("player_name"),
+                    "player_in_id": ev.get("sub_in_id") or ev.get("player_in_id"),
+                    "player_in_name": player_in_name,
+                    "player_assist_id": ev.get("assist_id") or ev.get("player_assist_id"),
+                    "assist_name": assist_name,
+                    "description": ev.get("event_desc") or ev.get("description")
+                }
+                all_events.append(row)
+
+        total = len(all_events)
+        # Sort similar to SQL: minute ascending (nulls last), then synthetic id
+        def sort_key(r):
+            m = r.get("minute")
+            if m is None:
+                m_val = 999999
+            else:
+                try:
+                    m_val = int(m)
+                except Exception:
+                    m_val = 999999
+            return (m_val, str(r.get("game_event_id")))
+        all_events.sort(key=sort_key)
+        page_rows = all_events[skip: skip + page_size]
+        return page_rows, total
+
+    (rows, total), ms = run_mongo(_q)
+    return jsonify(dict(ms=ms, rows=rows, page=page, page_size=page_size, total=total, source="mongo"))
+
+# Helper to generate next sequence for Mongo-only game events
+def mongo_next_sequence(name):
+    doc = mongo_db.counters.find_one_and_update(
+        {"_id": name}, {"$inc": {"seq": 1}}, upsert=True, return_document=ReturnDocument.AFTER
+    )
+    return doc.get("seq")
+
+# Mongo: Get single game event
+@app.get("/api/mongo/game-event/<event_id>")
+def api_mongo_game_event_get(event_id):
+    # event_id could be numeric or string
+    try:
+        # try int casting for consistent type matching
+        eid_int = int(event_id)
+        id_query_vals = [eid_int, event_id]
+    except ValueError:
+        id_query_vals = [event_id]
+    game_doc = mongo_db.games.find_one({"events.game_event_id": {"$in": id_query_vals}}, {"_id":1, "events":1})
+    if not game_doc:
+        return jsonify({"error": "Event not found"}), 404
+    for ev in game_doc.get("events", []):
+        if ev.get("game_event_id") in id_query_vals:
+            ev_out = ev.copy()
+            ev_out["game_id"] = game_doc.get("_id")
+            return jsonify(dict(row=ev_out))
+    return jsonify({"error": "Event not found"}), 404
+
+# Mongo: Create game event (append to game's events array)
+@app.post("/api/mongo/game-event")
+def api_mongo_game_event_create():
+    data = request.get_json() or {}
+    game_id = data.get("game_id")
+    if game_id is None:
+        return jsonify({"error": "game_id required"}), 400
+    # Accept int or str game id (depending on ETL)
+    try:
+        game_id_cast = int(game_id)
+    except (TypeError, ValueError):
+        game_id_cast = game_id
+    game_doc = mongo_db.games.find_one({"_id": game_id_cast}, {"_id":1})
+    if not game_doc:
+        return jsonify({"error": "Game not found"}), 404
+
+    new_id = mongo_next_sequence("game_event_id")
+    # Optionally enrich names from Mongo players collection
+    def _player_name(pid):
+        if pid is None: return None
+        doc = mongo_db.players.find_one({"player_id": pid}, {"name":1})
+        return doc.get("name") if doc else None
+
+    event_doc = {
+        "game_event_id": new_id,
+        "minute": data.get("minute"),
+        "type": data.get("type"),
+        "club_id": data.get("club_id"),
+        "player_id": data.get("player_id"),
+        "player_name": data.get("player_name") or _player_name(data.get("player_id")),
+        "sub_in_id": data.get("player_in_id"),
+        "player_in_name": data.get("player_in_name") or _player_name(data.get("player_in_id")),
+        "assist_id": data.get("player_assist_id"),
+        "assist_name": data.get("assist_name") or _player_name(data.get("player_assist_id")),
+        "event_desc": data.get("description") or data.get("event_desc")
+    }
+    mongo_db.games.update_one({"_id": game_id_cast}, {"$push": {"events": event_doc}})
+    event_doc["game_id"] = game_id_cast
+    return jsonify(dict(row=event_doc)), 201
+
+# Mongo: Update game event
+@app.post("/api/mongo/game-event/<event_id>/update")
+def api_mongo_game_event_update(event_id):
+    data = request.get_json() or {}
+    try:
+        eid_int = int(event_id)
+        id_query_vals = [eid_int, event_id]
+    except ValueError:
+        id_query_vals = [event_id]
+    game_doc = mongo_db.games.find_one({"events.game_event_id": {"$in": id_query_vals}}, {"_id":1})
+    if not game_doc:
+        return jsonify({"error": "Event not found"}), 404
+    game_id = game_doc.get("_id")
+
+    # Build update fields (only set provided keys)
+    set_ops = {}
+    mapping = {
+        "minute": "minute",
+        "type": "type",
+        "club_id": "club_id",
+        "player_id": "player_id",
+        "player_name": "player_name",
+        "player_in_id": "sub_in_id",
+        "player_in_name": "player_in_name",
+        "player_assist_id": "assist_id",
+        "assist_name": "assist_name",
+        "description": "event_desc",
+        "event_desc": "event_desc"
+    }
+    for inp_key, field in mapping.items():
+        if inp_key in data:
+            set_ops[f"events.$.{field}"] = data.get(inp_key)
+    if not set_ops:
+        return jsonify({"error": "No fields to update"}), 400
+
+    res = mongo_db.games.update_one({"_id": game_id, "events.game_event_id": {"$in": id_query_vals}}, {"$set": set_ops})
+    if res.modified_count == 0:
+        return jsonify({"error": "Update failed"}), 500
+    return jsonify({"success": True, "game_event_id": event_id})
+
+# Mongo: Delete game event
+@app.delete("/api/mongo/game-event/<event_id>")
+def api_mongo_game_event_delete(event_id):
+    try:
+        eid_int = int(event_id)
+        id_query_vals = [eid_int, event_id]
+    except ValueError:
+        id_query_vals = [event_id]
+    game_doc = mongo_db.games.find_one({"events.game_event_id": {"$in": id_query_vals}}, {"_id":1})
+    if not game_doc:
+        return jsonify({"error": "Event not found"}), 404
+    res = mongo_db.games.update_one({"_id": game_doc.get("_id")}, {"$pull": {"events": {"game_event_id": {"$in": id_query_vals}}}})
+    if res.modified_count == 0:
+        return jsonify({"error": "Delete failed"}), 500
+    return jsonify({"success": True, "deleted": event_id})
 
 # Get single game event
 @app.get("/api/game-event/<event_id>")

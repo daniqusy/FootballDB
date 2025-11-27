@@ -18,6 +18,13 @@
       <select id="season" class="form-select" required></select>
     </div>
     <div class="col-12 col-md-2">
+      <label class="form-label">Source</label>
+      <select id="roi-source" class="form-select">
+        <option value="sql" selected>SQL</option>
+        <option value="mongo">Mongo</option>
+      </select>
+    </div>
+    <div class="col-12 col-md-2">
       <label class="form-label">Sort by</label>
       <select id="sort_by" class="form-select">
         <option value="post_minutes" selected>Post minutes</option>
@@ -107,7 +114,9 @@
   });
 
   async function loadSeasons(club_id) {
-    const data = await (await fetch(`/api/clubs/${club_id}/seasons`)).json();
+    const source = document.getElementById("roi-source").value;
+    const root = source === "mongo" ? "/api/mongo" : "/api";
+    const data = await (await fetch(`${root}/clubs/${club_id}/seasons`)).json();
     seasonSel.innerHTML = "";
     data.rows.forEach((r) => {
       const opt = document.createElement("option");
@@ -132,8 +141,11 @@
       sort_by,
       order,
     }).toString();
-    const data = await (await fetch("/api/club/roi?" + qs)).json();
-    meta.textContent = `Rows ${data.rows.length} — Query time: ${data.ms} ms`;
+    const source = document.getElementById("roi-source").value;
+    const root = source === "mongo" ? "/api/mongo" : "/api";
+    const data = await (await fetch(`${root}/club/roi?` + qs)).json();
+    const srcLabel = (data.source || source || "sql").toUpperCase();
+    meta.textContent = `Rows ${data.rows.length} — Query time: ${data.ms} ms — Source: ${srcLabel}`;
     bodyEl.innerHTML = "";
     data.rows.forEach((r, i) => {
       const tr = document.createElement("tr");
@@ -158,6 +170,12 @@
     await runROI();
   });
 
+  // Reload seasons when source changes (since endpoints differ)
+  document.getElementById("roi-source").addEventListener("change", async () => {
+    const cid = clubIdEl.value;
+    if (cid) await loadSeasons(cid);
+  });
+
   // Deep link support (?club_id=&season=)
   (async function init() {
     const url = new URL(window.location.href);
@@ -166,8 +184,10 @@
     if (cid) {
       // fetch name by id for display
       try {
+        const source = document.getElementById("roi-source").value;
+        const root = source === "mongo" ? "/api/mongo" : "/api";
         const info = await (
-          await fetch(`/api/club/${encodeURIComponent(cid)}/profile`)
+          await fetch(`${root}/club/${encodeURIComponent(cid)}/profile`)
         ).json();
         clubIdEl.value = cid;
         if (info && info.row && info.row.name) {

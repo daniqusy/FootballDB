@@ -12,7 +12,11 @@
   }
 
   .transfer-table-header {
-    background: linear-gradient(135deg, rgba(37,99,235,0.08), rgba(99,102,241,0.08));
+    background: linear-gradient(
+      135deg,
+      rgba(37, 99, 235, 0.08),
+      rgba(99, 102, 241, 0.08)
+    );
     border-radius: 0.5rem;
     padding: 1.5rem;
     margin-bottom: 1.5rem;
@@ -94,7 +98,9 @@
   }
 
   @keyframes spin {
-    to { transform: rotate(360deg); }
+    to {
+      transform: rotate(360deg);
+    }
   }
 
   .transfer-badge {
@@ -105,49 +111,77 @@
     font-weight: 600;
   }
 
-  .transfer-in { background: #dcfce7; color: #166534; }
-  .transfer-out { background: #fee2e2; color: #991b1b; }
+  .transfer-in {
+    background: #dcfce7;
+    color: #166534;
+  }
+  .transfer-out {
+    background: #fee2e2;
+    color: #991b1b;
+  }
 
   @media (max-width: 768px) {
-    .controls { gap: 0.5rem; }
+    .controls {
+      gap: 0.5rem;
+    }
     .controls .form-select,
     .controls .form-control {
       min-width: 120px;
       font-size: 0.9rem;
     }
-    .table { font-size: 0.85rem; }
+    .table {
+      font-size: 0.85rem;
+    }
   }
 </style>
 
 <div class="container py-4">
   <!-- Header -->
   <div class="transfer-table-header">
-    <h1 class="h3 mb-3" style="font-weight: 800;">Player Transfers</h1>
-    
+    <h1 class="h3 mb-3" style="font-weight: 800">Player Transfers</h1>
+
     <!-- Controls -->
     <div class="controls">
       <div class="d-flex gap-2 align-items-center">
-        <input 
-          type="text" 
-          id="transfer-search" 
-          class="form-control" 
+        <input
+          type="text"
+          id="transfer-search"
+          class="form-control"
           placeholder="Search by player or club..."
-          style="min-width: 250px;"
+          style="min-width: 250px"
         />
-        <button id="transfer-search-btn" class="btn btn-primary btn-sm">Search</button>
+        <button id="transfer-search-btn" class="btn btn-primary btn-sm">
+          Search
+        </button>
+        <select
+          id="transfer-source"
+          class="form-select form-select-sm"
+          style="min-width: 110px"
+        >
+          <option value="sql" selected>SQL</option>
+          <option value="mongo">Mongo</option>
+        </select>
       </div>
 
       <div class="d-flex gap-2 align-items-center ms-auto">
         <span class="subtle small" id="transfer-meta"></span>
-        <a href="/transfer/create" class="btn btn-success btn-sm">+ Add Transfer</a>
-        <button id="transfer-refresh" class="btn btn-outline-secondary btn-sm">Refresh</button>
+        <a href="/transfer/create" class="btn btn-success btn-sm"
+          >+ Add Transfer</a
+        >
+        <button id="transfer-refresh" class="btn btn-outline-secondary btn-sm">
+          Refresh
+        </button>
       </div>
     </div>
 
     <!-- Pagination controls -->
     <div class="controls">
       <span class="subtle small">Page size:</span>
-      <select id="transfer-page-size" class="form-select form-select-sm" style="min-width: 100px;">
+      <select
+        id="transfer-page-size"
+        class="form-select form-select-sm"
+        style="min-width: 100px"
+      >
         <option value="10">10</option>
         <option value="20" selected>20</option>
         <option value="50">50</option>
@@ -193,7 +227,8 @@
         </li>
         <li class="page-item disabled">
           <span class="page-link">
-            Page <span id="transfer-current-page">1</span> of <span id="transfer-total-pages">1</span>
+            Page <span id="transfer-current-page">1</span> of
+            <span id="transfer-total-pages">1</span>
           </span>
         </li>
         <li class="page-item" id="transfer-next-wrap">
@@ -214,14 +249,18 @@
   let pageSize = 20;
 
   async function loadTransfers(page = 1) {
-    const pageSize = parseInt(document.getElementById("transfer-page-size").value);
+    const pageSize = parseInt(
+      document.getElementById("transfer-page-size").value
+    );
     const search = document.getElementById("transfer-search").value.trim();
+    const source = document.getElementById("transfer-source").value;
 
     const tbody = document.getElementById("transfer-table-body");
     tbody.innerHTML = `<tr><td colspan="9" class="text-center py-4"><div class="loading-spinner"></div><div class="mt-2">Loading...</div></td></tr>`;
 
     try {
-      let url = `/api/transfers/list?page=${page}&page_size=${pageSize}`;
+      const root = source === "mongo" ? "/api/mongo" : "/api";
+      let url = `${root}/transfers/list?page=${page}&page_size=${pageSize}`;
       if (search) url += `&search=${encodeURIComponent(search)}`;
 
       const res = await J(url);
@@ -246,13 +285,17 @@
     }
 
     tbody.innerHTML = "";
-    rows.forEach(row => {
+    rows.forEach((row) => {
       const tr = document.createElement("tr");
       tr.classList.add("transfer-row");
-      
-      const transferFee = row.transfer_fee ? new Intl.NumberFormat('en-US').format(row.transfer_fee) : "—";
-      const marketValue = row.market_value_in_eur ? new Intl.NumberFormat('en-US').format(row.market_value_in_eur) : "—";
-      
+
+      const transferFee = row.transfer_fee
+        ? new Intl.NumberFormat("en-US").format(row.transfer_fee)
+        : "—";
+      const marketValue = row.market_value_in_eur
+        ? new Intl.NumberFormat("en-US").format(row.market_value_in_eur)
+        : "—";
+
       tr.innerHTML = `
         <td><strong>#${row.transfer_id}</strong></td>
         <td>${row.player_name || "—"}</td>
@@ -263,8 +306,12 @@
         <td class="text-end">${transferFee}</td>
         <td class="text-end">${marketValue}</td>
         <td class="text-center">
-          <a href="/transfer/edit?transfer_id=${row.transfer_id}" class="btn btn-link btn-sm text-decoration-none">Edit</a>
-          <button class="btn btn-link btn-sm text-danger text-decoration-none delete-transfer-btn" data-transfer-id="${row.transfer_id}">Delete</button>
+          <a href="/transfer/edit?transfer_id=${
+            row.transfer_id
+          }" class="btn btn-link btn-sm text-decoration-none">Edit</a>
+          <button class="btn btn-link btn-sm text-danger text-decoration-none delete-transfer-btn" data-transfer-id="${
+            row.transfer_id
+          }">Delete</button>
         </td>
       `;
       tbody.appendChild(tr);
@@ -277,35 +324,55 @@
 
     document.getElementById("transfer-current-page").textContent = currentPage;
     document.getElementById("transfer-total-pages").textContent = totalPages;
-    document.getElementById("transfer-row-count").textContent = `Showing ${(currentPage - 1) * pageSize + 1}–${Math.min(currentPage * pageSize, totalTransfers)} of ${totalTransfers}`;
+    document.getElementById("transfer-row-count").textContent = `Showing ${
+      (currentPage - 1) * pageSize + 1
+    }–${Math.min(currentPage * pageSize, totalTransfers)} of ${totalTransfers}`;
 
     document.getElementById("transfer-prev").disabled = currentPage === 1;
-    document.getElementById("transfer-prev-wrap").classList.toggle("disabled", currentPage === 1);
-    document.getElementById("transfer-next").disabled = currentPage === totalPages;
-    document.getElementById("transfer-next-wrap").classList.toggle("disabled", currentPage === totalPages);
+    document
+      .getElementById("transfer-prev-wrap")
+      .classList.toggle("disabled", currentPage === 1);
+    document.getElementById("transfer-next").disabled =
+      currentPage === totalPages;
+    document
+      .getElementById("transfer-next-wrap")
+      .classList.toggle("disabled", currentPage === totalPages);
   }
 
   function updateMeta(res) {
     const metaEl = document.getElementById("transfer-meta");
     const ms = res.ms || 0;
-    metaEl.innerHTML = `<span class="meta-badge">${ms}ms</span>`;
+    const source = (res.source || "sql").toUpperCase();
+    metaEl.innerHTML = `<span class="meta-badge">${source} ${ms}ms</span>`;
   }
 
   // Event listeners
-  document.getElementById("transfer-search-btn").addEventListener("click", () => {
+  document
+    .getElementById("transfer-search-btn")
+    .addEventListener("click", () => {
+      currentPage = 1;
+      loadTransfers(1);
+    });
+
+  document
+    .getElementById("transfer-search")
+    .addEventListener("keypress", (e) => {
+      if (e.key === "Enter") {
+        currentPage = 1;
+        loadTransfers(1);
+      }
+    });
+
+  document
+    .getElementById("transfer-refresh")
+    .addEventListener("click", () => loadTransfers(currentPage));
+  document
+    .getElementById("transfer-page-size")
+    .addEventListener("change", () => loadTransfers(1));
+  document.getElementById("transfer-source").addEventListener("change", () => {
     currentPage = 1;
     loadTransfers(1);
   });
-
-  document.getElementById("transfer-search").addEventListener("keypress", (e) => {
-    if (e.key === "Enter") {
-      currentPage = 1;
-      loadTransfers(1);
-    }
-  });
-
-  document.getElementById("transfer-refresh").addEventListener("click", () => loadTransfers(currentPage));
-  document.getElementById("transfer-page-size").addEventListener("change", () => loadTransfers(1));
 
   document.getElementById("transfer-prev").addEventListener("click", () => {
     if (currentPage > 1) loadTransfers(currentPage - 1);
@@ -319,14 +386,20 @@
   document.addEventListener("click", async (e) => {
     if (e.target.classList.contains("delete-transfer-btn")) {
       const transferId = e.target.getAttribute("data-transfer-id");
-      
-      if (confirm("Are you sure you want to delete this transfer? This action cannot be undone.")) {
+
+      if (
+        confirm(
+          "Are you sure you want to delete this transfer? This action cannot be undone."
+        )
+      ) {
         try {
-          const resp = await fetch(`/api/transfer/${transferId}`, {
+          const source = document.getElementById("transfer-source").value;
+          const root = source === "mongo" ? "/api/mongo" : "/api";
+          const resp = await fetch(`${root}/transfer/${transferId}`, {
             method: "DELETE",
-            headers: { "Content-Type": "application/json" }
+            headers: { "Content-Type": "application/json" },
           });
-          
+
           if (resp.ok) {
             alert("Transfer deleted successfully");
             loadTransfers(currentPage);

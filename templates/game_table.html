@@ -1,43 +1,39 @@
 {% extends "base.html" %} {% block body %}
-
 <style>
   :root {
     --ink-900: #111827;
-    --ink-700: #374151;
     --ink-500: #6b7280;
-    --bg-card: #ffffff;
     --bg-soft: #f8fafc;
     --brand-500: #2563eb;
     --brand-600: #1d4ed8;
   }
-
   .game-table-header {
-    background: linear-gradient(135deg, rgba(37,99,235,0.08), rgba(99,102,241,0.08));
-    border-radius: 0.5rem;
-    padding: 1.5rem;
-    margin-bottom: 1.5rem;
+    background: linear-gradient(
+      135deg,
+      rgba(37, 99, 235, 0.08),
+      rgba(99, 102, 241, 0.08)
+    );
     border: 1px solid #eef2f7;
+    border-radius: 0.5rem;
+    padding: 1.25rem 1.5rem;
+    margin-bottom: 1.5rem;
   }
-
   .controls {
     display: flex;
     flex-wrap: wrap;
     gap: 1rem;
     align-items: center;
-    margin-bottom: 1rem;
+    margin-bottom: 0.75rem;
   }
-
   .controls .form-select,
   .controls .form-control {
-    min-width: 150px;
+    min-width: 140px;
   }
-
   .table-wrapper {
     border-radius: 0.5rem;
     overflow: hidden;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
   }
-
   .table thead th {
     background: #f8fafc;
     font-weight: 600;
@@ -45,119 +41,108 @@
     border-bottom: 2px solid #e5e7eb;
     vertical-align: middle;
   }
-
   .table tbody tr {
     border-bottom: 1px solid #e5e7eb;
     transition: background-color 0.15s ease;
   }
-
   .table tbody tr:hover {
     background: #fbfdff;
   }
-
-  .game-row {
-    cursor: pointer;
-  }
-
-  .meta-badge {
+  .score-badge {
     display: inline-block;
     padding: 0.25rem 0.5rem;
     border-radius: 0.375rem;
     background: #ecf2ff;
-    color: var(--brand-600);
-    font-size: 0.8rem;
     font-weight: 600;
   }
-
-  .subtle {
-    color: var(--ink-500);
+  .meta-badge {
+    display: inline-block;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.375rem;
+    background: #eef2ff;
+    font-size: 0.75rem;
+    font-weight: 600;
   }
-
+  .source-badge {
+    display: inline-block;
+    padding: 0.15rem 0.4rem;
+    border-radius: 0.25rem;
+    font-size: 0.7rem;
+    font-weight: 600;
+  }
+  .source-sql {
+    background: #dcfce7;
+    color: #166534;
+  }
+  .source-mongo {
+    background: #fed7aa;
+    color: #92400e;
+  }
   .pagination-wrap {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-top: 1.5rem;
-    padding: 1rem;
-    background: var(--bg-soft);
+    margin-top: 1rem;
+    padding: 0.75rem 1rem;
+    background: #f8fafc;
     border-radius: 0.5rem;
   }
-
   .loading-spinner {
     display: inline-block;
     width: 20px;
     height: 20px;
     border: 3px solid #e5e7eb;
-    border-top-color: var(--brand-500);
+    border-top-color: #2563eb;
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
   }
-
   @keyframes spin {
-    to { transform: rotate(360deg); }
-  }
-
-  .score-badge {
-    display: inline-block;
-    padding: 0.25rem 0.75rem;
-    background: #f0f0f0;
-    border-radius: 0.25rem;
-    font-weight: 600;
-    font-size: 0.9rem;
-  }
-
-  @media (max-width: 768px) {
-    .controls { gap: 0.5rem; }
-    .controls .form-select,
-    .controls .form-control {
-      min-width: 120px;
-      font-size: 0.9rem;
+    to {
+      transform: rotate(360deg);
     }
-    .table { font-size: 0.85rem; }
+  }
+  .subtle {
+    color: var(--ink-500);
   }
 </style>
 
 <div class="container py-4">
-  <!-- Header -->
   <div class="game-table-header">
-    <h1 class="h3 mb-3" style="font-weight: 800;">Games</h1>
-    
-    <!-- Controls -->
-    <div class="controls">
+    <div class="d-flex justify-content-between align-items-center mb-2">
+      <h1 class="h4 mb-0" style="font-weight: 800">Games</h1>
       <div class="d-flex gap-2 align-items-center">
-        <input 
-          type="date" 
-          id="game-date" 
-          class="form-control" 
-        />
-        <button id="game-search-btn" class="btn btn-primary btn-sm">Search</button>
-      </div>
-
-      <div class="d-flex gap-2 align-items-center">
-        <span class="filter-label subtle" style="margin: 0;">Competition</span>
-        <select id="game-competition" class="form-select form-select-sm" style="min-width: 150px;">
-          <option value="">All Competitions</option>
-        </select>
-      </div>
-
-      <div class="d-flex gap-2 align-items-center">
-        <span class="filter-label subtle" style="margin: 0;">Season</span>
-        <select id="game-season" class="form-select form-select-sm" style="min-width: 110px;">
-          <option value="">All Seasons</option>
-        </select>
-      </div>
-
-      <div class="d-flex gap-2 align-items-center ms-auto">
         <span class="subtle small" id="game-meta"></span>
-        <a href="/match/create" class="btn btn-success btn-sm">+ Create Match</a>
-        <button id="game-refresh" class="btn btn-outline-secondary btn-sm">Refresh</button>
+        <button id="game-refresh" class="btn btn-outline-secondary btn-sm">
+          Refresh
+        </button>
       </div>
     </div>
 
-    <!-- Pagination controls -->
+    <!-- Controls -->
     <div class="controls">
-      <span class="subtle small">Page size:</span>
-      <select id="game-page-size" class="form-select form-select-sm" style="min-width: 100px;">
+      <div class="d-flex gap-2 align-items-center">
+        <span class="subtle small" style="margin: 0">Source</span>
+        <select
+          id="game-source"
+          class="form-select form-select-sm"
+          style="min-width: 110px"
+        >
+          <option value="sql">SQL</option>
+          <option value="mongo">Mongo</option>
+        </select>
+      </div>
+      <input type="date" id="game-date" class="form-control form-control-sm" />
+      <select id="game-competition" class="form-select form-select-sm">
+        <option value="">All Competitions</option>
+      </select>
+      <select id="game-season" class="form-select form-select-sm">
+        <option value="">All Seasons</option>
+      </select>
+      <select
+        id="game-page-size"
+        class="form-select form-select-sm"
+        style="min-width: 100px"
+      >
         <option value="10">10</option>
         <option value="20" selected>20</option>
         <option value="50">50</option>
@@ -171,15 +156,15 @@
     <table class="table table-sm mb-0">
       <thead>
         <tr>
-          <th style="width: 12%;">Date</th>
-          <th style="width: 14%;">Competition</th>
-          <th style="width: 10%;">Round</th>
-          <th style="width: 18%;">Home Team</th>
-          <th style="width: 10%; text-align: center;">Score</th>
-          <th style="width: 18%;">Away Team</th>
-          <th style="width: 12%;">Stadium</th>
-          <th style="width: 10%; text-align: center;">Attendance</th>
-          <th style="width: 8%; text-align: center;">Action</th>
+          <th style="width: 12%">Date</th>
+          <th style="width: 14%">League</th>
+          <th style="width: 8%">Round</th>
+          <th style="width: 18%">Home Team</th>
+          <th style="width: 10%; text-align: center">Score</th>
+          <th style="width: 18%">Away Team</th>
+          <th style="width: 12%">Stadium</th>
+          <th style="width: 10%; text-align: center">Attendance</th>
+          <th style="width: 8%; text-align: center">Action</th>
         </tr>
       </thead>
       <tbody id="game-table-body">
@@ -202,9 +187,10 @@
           <button class="page-link" id="game-prev">← Previous</button>
         </li>
         <li class="page-item disabled">
-          <span class="page-link">
-            Page <span id="game-current-page">1</span> of <span id="game-total-pages">1</span>
-          </span>
+          <span class="page-link"
+            >Page <span id="game-current-page">1</span> of
+            <span id="game-total-pages">1</span></span
+          >
         </li>
         <li class="page-item" id="game-next-wrap">
           <button class="page-link" id="game-next">Next →</button>
@@ -219,179 +205,170 @@
     const r = await fetch(u);
     return r.json();
   }
-
   let currentPage = 1;
   let pageSize = 20;
-
   function num(x) {
     return x == null ? "—" : Number(x).toLocaleString();
   }
-
   async function loadGames(page = 1) {
+    const source = document.getElementById("game-source").value;
     const pageSize = parseInt(document.getElementById("game-page-size").value);
     const competition = document.getElementById("game-competition").value;
     const season = document.getElementById("game-season").value;
     const date = document.getElementById("game-date").value;
-
     const tbody = document.getElementById("game-table-body");
     tbody.innerHTML = `<tr><td colspan="9" class="text-center py-4"><div class="loading-spinner"></div><div class="mt-2">Loading...</div></td></tr>`;
-
     try {
-      let url = `/api/games/list?page=${page}&page_size=${pageSize}`;
+      const baseRoot = source === "mongo" ? "/api/mongo" : "/api";
+      let url = `${baseRoot}/games/list?page=${page}&page_size=${pageSize}`;
       if (date) url += `&date=${date}`;
       if (competition) url += `&competition_id=${competition}`;
       if (season) url += `&season=${season}`;
-
       const res = await J(url);
-
       currentPage = page;
       renderTable(res);
       updatePagination(res, pageSize);
-      updateMeta(res);
-      
-      // Load competitions and seasons on first load
+      updateMeta(res, source);
       if (page === 1) {
-        loadCompetitions();
-        loadSeasons();
+        loadCompetitions(source);
+        loadSeasons(source);
       }
     } catch (err) {
       tbody.innerHTML = `<tr><td colspan="9" class="text-center text-danger py-4">Error loading games</td></tr>`;
       console.error(err);
     }
   }
-
-  async function loadCompetitions() {
+  async function loadCompetitions(source) {
     try {
-      const res = await J("/api/competitions");
-      const select = document.getElementById("game-competition");
-      if (res.rows) {
-        res.rows.forEach(comp => {
-          const opt = document.createElement("option");
-          opt.value = comp.competition_id;
-          opt.textContent = comp.competition_name;
-          select.appendChild(opt);
-        });
-      }
-    } catch (err) {
-      console.error("Failed to load competitions:", err);
+      const baseRoot = source === "mongo" ? "/api/mongo" : "/api";
+      const res = await J(`${baseRoot}/competitions`);
+      const sel = document.getElementById("game-competition");
+      // clear old (keep first option)
+      sel
+        .querySelectorAll("option:not(:first-child)")
+        .forEach((o) => o.remove());
+      (res.rows || []).forEach((c) => {
+        const o = document.createElement("option");
+        o.value = c.competition_id;
+        o.textContent = c.competition_name;
+        sel.appendChild(o);
+      });
+    } catch (e) {
+      console.error("Failed competitions", e);
     }
   }
-
-  async function loadSeasons() {
+  async function loadSeasons(source) {
     try {
-      const res = await J("/api/games/seasons");
-      const select = document.getElementById("game-season");
-      if (res.rows) {
-        res.rows.forEach(season => {
-          const opt = document.createElement("option");
-          opt.value = season.season;
-          opt.textContent = season.season;
-          select.appendChild(opt);
-        });
-      }
-    } catch (err) {
-      console.error("Failed to load seasons:", err);
+      const baseRoot = source === "mongo" ? "/api/mongo" : "/api";
+      const res = await J(`${baseRoot}/games/seasons`);
+      const sel = document.getElementById("game-season");
+      sel
+        .querySelectorAll("option:not(:first-child)")
+        .forEach((o) => o.remove());
+      (res.rows || []).forEach((s) => {
+        const o = document.createElement("option");
+        o.value = s.season;
+        o.textContent = s.season;
+        sel.appendChild(o);
+      });
+    } catch (e) {
+      console.error("Failed seasons", e);
     }
   }
-
   function renderTable(res) {
     const tbody = document.getElementById("game-table-body");
     const rows = res.rows || [];
-
-    if (rows.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="9" class="text-center py-4 text-muted">No games found</td></tr>`;
+    if (!rows.length) {
+      tbody.innerHTML =
+        '<tr><td colspan="9" class="text-center py-4 text-muted">No games found</td></tr>';
       return;
     }
-
     tbody.innerHTML = "";
-    rows.forEach(row => {
+    rows.forEach((row) => {
       const attendance = row.attendance ? num(row.attendance) : "—";
       const stadium = row.stadium || "—";
       const homeGoals = row.home_club_goals || 0;
       const awayGoals = row.away_club_goals || 0;
-
       const tr = document.createElement("tr");
       tr.classList.add("game-row");
-      
-      tr.innerHTML = `
-        <td>${row.date_str || "—"}</td>
-        <td>${row.league_name || row.competition_id || "—"}</td>
-        <td>${row.round || "—"}</td>
-        <td>${row.home_name || "—"}</td>
-        <td class="text-center"><span class="score-badge">${homeGoals} - ${awayGoals}</span></td>
-        <td>${row.away_name || "—"}</td>
-        <td class="subtle">${stadium}</td>
-        <td class="text-center">${attendance}</td>
-        <td class="text-center">
-          <a href="/match/edit?game_id=${row.game_id}" class="btn btn-link btn-sm text-decoration-none">Edit</a>
-          <button class="btn btn-link btn-sm text-danger text-decoration-none delete-game-btn" data-game-id="${row.game_id}" data-teams="${row.home_name} vs ${row.away_name}">Delete</button>
-        </td>
-      `;
-      
-      // Make row clickable to view match
+      tr.innerHTML = `<td>${row.date_str || "—"}</td><td>${
+        row.league_name || row.competition_id || "—"
+      }</td><td>${row.round || "—"}</td><td>${
+        row.home_name || "—"
+      }</td><td class="text-center"><span class="score-badge">${homeGoals} - ${awayGoals}</span></td><td>${
+        row.away_name || "—"
+      }</td><td class="subtle">${stadium}</td><td class="text-center">${attendance}</td><td class="text-center"><a href="/match/edit?game_id=${
+        row.game_id
+      }" class="btn btn-link btn-sm text-decoration-none">Edit</a> <button class="btn btn-link btn-sm text-danger text-decoration-none delete-game-btn" data-game-id="${
+        row.game_id
+      }" data-teams="${row.home_name} vs ${
+        row.away_name
+      }">Delete</button></td>`;
       tr.addEventListener("click", (e) => {
-        // Don't navigate if clicking on action buttons
         if (e.target.closest(".btn")) return;
         window.location.href = `/match?game_id=${row.game_id}`;
       });
-      
       tbody.appendChild(tr);
     });
   }
-
   function updatePagination(res, pageSize) {
-    const totalGames = res.total || res.rows.length;
-    const totalPages = Math.ceil(totalGames / pageSize);
-
+    const total = res.total || res.rows.length;
+    const totalPages = Math.ceil(total / pageSize);
     document.getElementById("game-current-page").textContent = currentPage;
     document.getElementById("game-total-pages").textContent = totalPages;
-    document.getElementById("game-row-count").textContent = `Showing ${(currentPage - 1) * pageSize + 1}–${Math.min(currentPage * pageSize, totalGames)} of ${totalGames}`;
-
+    document.getElementById("game-row-count").textContent = `Showing ${
+      (currentPage - 1) * pageSize + 1
+    }–${Math.min(currentPage * pageSize, total)} of ${total}`;
     document.getElementById("game-prev").disabled = currentPage === 1;
-    document.getElementById("game-prev-wrap").classList.toggle("disabled", currentPage === 1);
+    document
+      .getElementById("game-prev-wrap")
+      .classList.toggle("disabled", currentPage === 1);
     document.getElementById("game-next").disabled = currentPage === totalPages;
-    document.getElementById("game-next-wrap").classList.toggle("disabled", currentPage === totalPages);
+    document
+      .getElementById("game-next-wrap")
+      .classList.toggle("disabled", currentPage === totalPages);
   }
-
-  function updateMeta(res) {
-    const metaEl = document.getElementById("game-meta");
+  function updateMeta(res, source) {
+    const meta = document.getElementById("game-meta");
     const ms = res.ms || 0;
-    metaEl.innerHTML = `<span class="meta-badge">${ms}ms</span>`;
+    meta.innerHTML = `<span class="meta-badge">${source.toUpperCase()} ${ms}ms</span>`;
   }
-
-  // Event listeners
-  document.getElementById("game-search-btn").addEventListener("click", () => {
-    currentPage = 1;
-    loadGames(1);
-  });
-
-  document.getElementById("game-refresh").addEventListener("click", () => loadGames(currentPage));
-  document.getElementById("game-competition").addEventListener("change", () => loadGames(1));
-  document.getElementById("game-season").addEventListener("change", () => loadGames(1));
-  document.getElementById("game-page-size").addEventListener("change", () => loadGames(1));
-
+  document
+    .getElementById("game-refresh")
+    .addEventListener("click", () => loadGames(currentPage));
+  document
+    .getElementById("game-competition")
+    .addEventListener("change", () => loadGames(1));
+  document
+    .getElementById("game-season")
+    .addEventListener("change", () => loadGames(1));
+  document
+    .getElementById("game-page-size")
+    .addEventListener("change", () => loadGames(1));
+  document
+    .getElementById("game-source")
+    .addEventListener("change", () => loadGames(1));
   document.getElementById("game-prev").addEventListener("click", () => {
     if (currentPage > 1) loadGames(currentPage - 1);
   });
-
-  document.getElementById("game-next").addEventListener("click", () => {
-    loadGames(currentPage + 1);
-  });
-
-  // Delete game handler
+  document
+    .getElementById("game-next")
+    .addEventListener("click", () => loadGames(currentPage + 1));
   document.addEventListener("click", async (e) => {
     if (e.target.classList.contains("delete-game-btn")) {
-      e.stopPropagation(); // Prevent row click navigation
+      e.stopPropagation();
       const gameId = e.target.getAttribute("data-game-id");
       const teams = e.target.getAttribute("data-teams");
-      
-      if (confirm(`Are you sure you want to delete the match "${teams}"? This action cannot be undone.`)) {
+      if (
+        confirm(
+          `Are you sure you want to delete the match "${teams}"? This action cannot be undone.`
+        )
+      ) {
         try {
           const resp = await fetch(`/api/match/${gameId}`, {
             method: "DELETE",
-            headers: { "Content-Type": "application/json" }
+            headers: { "Content-Type": "application/json" },
           });
-          
           if (resp.ok) {
             alert("Match deleted successfully");
             loadGames(currentPage);
@@ -405,9 +382,6 @@
       }
     }
   });
-
-  // Initial load
   loadGames(1);
 </script>
-
 {% endblock %}
