@@ -1,6 +1,13 @@
 {% extends "base.html" %} {% block body %}
 <div class="container">
   <h1 class="h4">Player Form</h1>
+  <div class="mb-2">
+    <label class="form-label me-2">Source</label>
+    <select id="pf-source" class="form-select d-inline-block w-auto">
+      <option value="sql">SQL</option>
+      <option value="mongo">Mongo</option>
+    </select>
+  </div>
   <form id="pf" class="row g-2 align-items-end">
     <div class="col-12 col-md-4 position-relative">
       <label class="form-label">Player</label>
@@ -86,7 +93,12 @@
       return;
     }
     typingTimer = setTimeout(async () => {
-      const r = await fetch("/api/players/search?q=" + encodeURIComponent(q));
+      const source = document.getElementById("pf-source").value;
+      const base =
+        source === "mongo"
+          ? "/api/mongo/players/search"
+          : "/api/players/search";
+      const r = await fetch(base + "?q=" + encodeURIComponent(q));
       const data = await r.json();
       suggestBox.innerHTML = "";
       data.rows.forEach((p) => {
@@ -108,7 +120,9 @@
 
   // Load competitions once player selected
   async function loadCompetitions(pid) {
-    const res = await fetch(`/api/players/${pid}/competitions`);
+    const source = document.getElementById("pf-source").value;
+    const base = source === "mongo" ? "/api/mongo/players" : "/api/players";
+    const res = await fetch(`${base}/${pid}/competitions`);
     const data = await res.json();
     compSel.innerHTML = "";
     // pick default: domestic league if available
@@ -140,8 +154,10 @@
   });
 
   async function loadSeasons(pid, comp) {
+    const source = document.getElementById("pf-source").value;
+    const base = source === "mongo" ? "/api/mongo/players" : "/api/players";
     const res = await fetch(
-      `/api/players/${pid}/seasons?competition_id=${encodeURIComponent(comp)}`
+      `${base}/${pid}/seasons?competition_id=${encodeURIComponent(comp)}`
     );
     const data = await res.json();
     seasonSel.innerHTML = "";
@@ -168,9 +184,14 @@
       season,
       n,
     }).toString();
-    const res = await fetch("/api/player/form?" + qs);
+    const source = document.getElementById("pf-source").value;
+    const base =
+      source === "mongo" ? "/api/mongo/player/form" : "/api/player/form";
+    const res = await fetch(base + "?" + qs);
     const data = await res.json();
-    meta.textContent = `Query time: ${data.ms} ms`;
+    meta.textContent = `Source: ${source.toUpperCase()} • Query time: ${
+      data.ms
+    } ms`;
     tbody.innerHTML = "";
     let sumMin = 0,
       sumG = 0,
@@ -214,6 +235,16 @@
     document.getElementById("pf-per90").textContent = `(G/90: ${g90.toFixed(
       2
     )}, A/90: ${a90.toFixed(2)})`;
+  });
+
+  // When source changes, re-load competitions/seasons if player already selected
+  document.getElementById("pf-source").addEventListener("change", async () => {
+    const pid = playerIdEl.value;
+    if (pid) {
+      await loadCompetitions(pid);
+    }
+    meta.textContent = "";
+    tbody.innerHTML = "";
   });
 </script>
 {% endblock %}

@@ -155,6 +155,41 @@ def api_player_form():
     rows, ms = run_sql(sql, (player_id, comp, season, n))
     return jsonify(dict(ms=ms, rows=rows))
 
+# Mongo: Player form (latest N matches for player in competition-season)
+@app.get("/api/mongo/player/form")
+def api_mongo_player_form():
+    try:
+        player_id = int(request.args.get("player_id"))
+    except (TypeError, ValueError):
+        return jsonify(dict(error="invalid player_id")), 400
+    comp = request.args.get("competition_id")
+    season = request.args.get("season")
+    n = int(request.args.get("n", 5))
+    if not comp or not season:
+        return jsonify(dict(error="competition_id and season required")), 400
+
+    def _q(db):
+        doc = db.player_seasons.find_one({"_id": f"{player_id}_{comp}_{season}"}) or {}
+        latest = doc.get("latest_matches", [])
+        # Slice to requested n
+        rows_out = []
+        for m in latest[:n]:
+            rows_out.append({
+                "game_id": m.get("game_id"),
+                "date_str": m.get("date"),
+                "minutes_played": m.get("min"),
+                "goals": m.get("g"),
+                "assists": m.get("a"),
+                "player_club_id": m.get("player_club_id"),
+                "home_club_id": m.get("home_club_id"),
+                "home_name": m.get("home_name"),
+                "away_club_id": m.get("away_club_id"),
+                "away_name": m.get("away_name")
+            })
+        return rows_out
+    rows, ms = run_mongo(_q)
+    return jsonify(dict(ms=ms, rows=rows, source="mongo"))
+
 # Top scorers by league-season with pagination
 @app.route("/top-scorers")
 def top_scorers_page():
@@ -168,18 +203,61 @@ def api_top_scorers():
     page_size = min(max(int(request.args.get("page_size", 20)), 1), 100)
     offset = (page - 1) * page_size
     sql = """
-      SELECT a.player_id, p.name as player_name, pb.image_url, SUM(a.goals) AS goals
-      FROM appearance a 
-      JOIN game g ON g.game_id=a.game_id
-      JOIN player p ON p.player_id=a.player_id
-      JOIN player_bio pb ON pb.player_id=a.player_id
-      WHERE g.competition_id=%s AND g.season=%s
-      GROUP BY a.player_id, p.name, pb.image_url
-      ORDER BY goals DESC
-      LIMIT %s OFFSET %s
-    """
+            WITH per AS (
+                SELECT a.player_id, a.player_club_id, SUM(a.goals) AS goals
+                FROM appearance a
+                JOIN game g ON g.game_id = a.game_id
+                WHERE g.competition_id = %s AND g.season = %s
+                GROUP BY a.player_id, a.player_club_id
+            ), best AS (
+          SELECT player_id, player_club_id, goals,
+              ROW_NUMBER() OVER (PARTITION BY player_id ORDER BY goals DESC) AS rn
+                FROM per
+            )
+         SELECT b.player_id, p.name AS player_name, pb.image_url,
+             b.goals, c.name AS club_name
+            FROM best b
+            JOIN player p ON p.player_id = b.player_id
+            JOIN player_bio pb ON pb.player_id = b.player_id
+            LEFT JOIN club c ON c.club_id = b.player_club_id
+            WHERE b.rn = 1 AND b.goals > 0
+            ORDER BY b.goals DESC
+            LIMIT %s OFFSET %s
+        """
     rows, ms = run_sql(sql, (comp, season, page_size, offset))
     return jsonify(dict(ms=ms, rows=rows, page=page, page_size=page_size))
+
+# Mongo: Top scorers by league-season with pagination (from player_seasons)
+@app.get("/api/mongo/top-scorers")
+def api_mongo_top_scorers():
+    comp = request.args.get("competition_id")
+    season = request.args.get("season")
+    page = max(int(request.args.get("page", 1)), 1)
+    page_size = min(max(int(request.args.get("page_size", 20)), 1), 100)
+    skip = (page - 1) * page_size
+
+    def _q(db):
+        query = {"competition_id": comp, "season": season}
+        # Count total distinct players in player_seasons for this comp+season
+        total = db.player_seasons.count_documents({**query, "totals.goals": {"$gt": 0}})
+        cur = db.player_seasons.find({**query, "totals.goals": {"$gt": 0}}, {
+            "player_id": 1, "totals.goals": 1
+        }).sort([["totals.goals", -1]]).skip(skip).limit(page_size)
+        rows = []
+        for ps in cur:
+            pid = ps.get("player_id")
+            goals = ((ps.get("totals") or {}).get("goals") or 0)
+            pl = db.players.find_one({"player_id": pid}, {"name":1, "image_url":1, "current_club_name":1}) or {}
+            rows.append({
+                "player_id": pid,
+                "player_name": pl.get("name"),
+                "image_url": pl.get("image_url"),
+                "club_name": pl.get("current_club_name"),
+                "goals": goals
+            })
+        return rows, total
+    (rows, total), ms = run_mongo(_q)
+    return jsonify(dict(ms=ms, rows=rows, page=page, page_size=page_size, total=total, source="mongo"))
 
 # Match view
 @app.route("/match")
@@ -331,6 +409,18 @@ def api_update_match(game_id):
         away_pos = int(data.get("away_club_position")) if data.get("away_club_position") else None
         attendance = int(data.get("attendance")) if data.get("attendance") else None
         
+        sql_update = """
+            UPDATE game 
+            SET date=%s, match_time=%s, competition_id=%s, season=%s, round=%s,
+                home_club_id=%s, away_club_id=%s,
+                home_club_goals=%s, away_club_goals=%s,
+                home_club_position=%s, away_club_position=%s,
+                stadium=%s, referee=%s, attendance=%s,
+                home_club_manager_name=%s, away_club_manager_name=%s,
+                home_club_formation=%s, away_club_formation=%s
+            WHERE game_id=%s
+        """
+
         run_sql(sql_update, (
             data.get("date"),
             match_time,
@@ -392,7 +482,7 @@ def api_match():
     JOIN competition c ON c.competition_id = g.competition_id
     WHERE g.game_id = %s
     """
-    game, _ = run_sql(sql_game, (gid,))
+    game, ms_game = run_sql(sql_game, (gid,))
     sql_ev = """
     SELECT
       ge.game_event_id,
@@ -416,8 +506,66 @@ def api_match():
     WHERE ge.game_id = %s
     ORDER BY ge.minute ASC, ge.game_event_id ASC
     """
-    events, ms2 = run_sql(sql_ev, (gid,))
-    return jsonify(dict(game=(game[0] if game else None), events=events))
+    events, ms_events = run_sql(sql_ev, (gid,))
+    total_ms = round((ms_game or 0) + (ms_events or 0), 2)
+    return jsonify(dict(game=(game[0] if game else None), events=events, ms=total_ms, ms_parts=dict(game=ms_game, events=ms_events), source="sql"))
+
+# Mongo: Match details
+@app.get("/api/mongo/match")
+def api_mongo_match():
+    gid = int(request.args.get("game_id"))
+    def _q(db):
+        doc = db.games.find_one({"_id": gid})
+        return doc
+    doc, ms = run_mongo(_q)
+    if not doc:
+        return jsonify(dict(ms=ms, game=None, events=[] , source="mongo"))
+    # Transform game document to SQL-like shape
+    game = {
+        "game_id": doc.get("_id"),
+        "competition_id": doc.get("competition_id"),
+        "competition_name": doc.get("competition_name"),
+        "season": doc.get("season"),
+        "round": doc.get("round"),
+        "date_str": doc.get("date"),
+        "home_club_id": (doc.get("home") or {}).get("club_id"),
+        "home_name": (doc.get("home") or {}).get("name"),
+        "home_club_goals": (doc.get("home") or {}).get("goals"),
+        "away_club_id": (doc.get("away") or {}).get("club_id"),
+        "away_name": (doc.get("away") or {}).get("name"),
+        "away_club_goals": (doc.get("away") or {}).get("goals"),
+        "home_club_position": (doc.get("home") or {}).get("position"),
+        "away_club_position": (doc.get("away") or {}).get("position"),
+        "stadium": doc.get("stadium"),
+        "referee": doc.get("referee"),
+        "attendance": doc.get("attendance"),
+        "home_club_formation": (doc.get("home") or {}).get("formation"),
+        "away_club_formation": (doc.get("away") or {}).get("formation"),
+        "match_time": doc.get("match_time"),
+        "home_club_manager_name": (doc.get("home") or {}).get("manager_name"),
+        "away_club_manager_name": (doc.get("away") or {}).get("manager_name"),
+    }
+    # Transform events
+    ev_rows = []
+    for ev in doc.get("events", []) or []:
+        club_id = ev.get("club_id")
+        side = "home" if club_id == game.get("home_club_id") else "away"
+        ev_rows.append({
+            "game_event_id": None,  # Not stored in Mongo doc
+            "game_id": game.get("game_id"),
+            "minute": ev.get("minute"),
+            "event_type": ev.get("type"),
+            "club_id": club_id,
+            "side": side,
+            "player_id": ev.get("player_id"),
+            "player_name": ev.get("player_name"),
+            "player_assist_id": ev.get("assist_id"),
+            "assist_name": ev.get("assist_name"),
+            "player_in_id": ev.get("sub_in_id"),
+            "player_in_name": ev.get("player_in_name"),
+            "description": ev.get("event_desc"),
+        })
+    return jsonify(dict(ms=ms, game=game, events=ev_rows, source="mongo"))
 
 # Club page
 @app.route("/club")
@@ -427,33 +575,52 @@ def club_page():
 # Club profile
 @app.get("/api/club/<int:cid>/profile")
 def api_club_profile(cid):
-    sql = """
-      WITH club_totals AS (
-        SELECT c.club_id,
-               c.name,
-               c.average_age,
-               c.stadium_name,
-               c.stadium_seats,
-               COALESCE(SUM(p.market_value_eur), 0) AS total_market_value_eur
-        FROM club c
-        LEFT JOIN player p
-          ON p.current_club_id = c.club_id
-         AND p.market_value_eur IS NOT NULL
-        GROUP BY c.club_id, c.name, c.average_age, c.stadium_name, c.stadium_seats
-      )
-      SELECT ct.club_id,
-             ct.name,
-             ct.average_age,
-             ct.stadium_name,
-             ct.stadium_seats,
-             ct.total_market_value_eur,
-             DENSE_RANK() OVER (ORDER BY ct.total_market_value_eur DESC) AS market_value_rank,
-             COUNT(*) OVER () AS clubs_ranked
-      FROM club_totals ct
-      WHERE ct.club_id=%s
-    """
-    rows, ms = run_sql(sql, (cid,))
-    return jsonify(dict(ms=ms, row=(rows[0] if rows else None)))
+        # Compute totals for all clubs first (subquery), then filter outside so window functions see full set
+        sql = """
+            SELECT * FROM (
+                SELECT c.club_id,
+                             c.name,
+                             c.average_age,
+                             c.stadium_name,
+                             c.stadium_seats,
+                             COALESCE(SUM(p.market_value_eur), 0) AS total_market_value_eur,
+                             DENSE_RANK() OVER (ORDER BY COALESCE(SUM(p.market_value_eur),0) DESC) AS market_value_rank,
+                             COUNT(*) OVER () AS clubs_ranked
+                FROM club c
+                LEFT JOIN player p
+                    ON p.current_club_id = c.club_id
+                 AND p.market_value_eur IS NOT NULL
+                GROUP BY c.club_id, c.name, c.average_age, c.stadium_name, c.stadium_seats
+            ) t
+            WHERE t.club_id=%s
+        """
+        rows, ms = run_sql(sql, (cid,))
+        return jsonify(dict(ms=ms, row=(rows[0] if rows else None)))
+
+# Mongo: Club profile
+@app.get("/api/mongo/club/<int:cid>/profile")
+def api_mongo_club_profile(cid):
+    def _q(db):
+        doc = db.clubs.find_one({"club_id": int(cid)}, {
+            "club_id": 1, "name": 1, "average_age": 1,
+            "stadium_name": 1, "stadium_seats": 1,
+            "total_market_value_eur": 1, "squad_size": 1,
+            "player_count": 1
+        })
+        if not doc:
+            return None
+        mv = doc.get("total_market_value_eur")
+        total = db.clubs.count_documents({}) or 0
+        rank = None
+        if mv is not None:
+            # Count clubs with strictly greater market value to derive rank
+            rank = (db.clubs.count_documents({"total_market_value_eur": {"$gt": mv}}) or 0) + 1
+        doc.pop("_id", None)
+        doc["market_value_rank"] = rank
+        doc["clubs_ranked"] = total
+        return doc
+    row, ms = run_mongo(_q)
+    return jsonify(dict(ms=ms, row=row, source="mongo"))
 
 # Club players (current squad by market value)
 @app.get("/api/club/<int:cid>/players")
@@ -469,6 +636,23 @@ def api_club_players(cid):
     """
     rows, ms = run_sql(sql, (cid,))
     return jsonify(dict(ms=ms, rows=rows))
+
+# Mongo: Club players
+@app.get("/api/mongo/club/<int:cid>/players")
+def api_mongo_club_players(cid):
+    def _q(db):
+        # Include players even if market_value_eur is null for parity with SQL endpoint
+        cur = db.players.find({"current_club_id": int(cid)}, {
+            "player_id": 1, "name": 1, "position": 1, "sub_position": 1,
+            "market_value_eur": 1
+        }).sort("market_value_eur", -1).limit(200)
+        out = []
+        for d in cur:
+            d.pop("_id", None)
+            out.append(d)
+        return out
+    rows, ms = run_mongo(_q)
+    return jsonify(dict(ms=ms, rows=rows, source="mongo"))
 
 # Club recent matches
 @app.get("/api/club/<int:cid>/matches")
@@ -497,6 +681,41 @@ def api_club_matches(cid):
     rows, ms = run_sql(base, tuple(params))
     return jsonify(dict(ms=ms, rows=rows))
 
+# Mongo: Club recent matches
+@app.get("/api/mongo/club/<int:cid>/matches")
+def api_mongo_club_matches(cid):
+    limit_n = min(max(int(request.args.get("limit", 12)), 1), 100)
+    comp = request.args.get("competition_id")
+    def _q(db):
+        q = {"$or": [{"home.club_id": int(cid)}, {"away.club_id": int(cid)}]}
+        if comp:
+            q["competition_id"] = comp
+        cur = db.games.find(q, {
+            "_id": 1, "date": 1,
+            "home.club_id": 1, "home.name": 1, "home.goals": 1,
+            "away.club_id": 1, "away.name": 1, "away.goals": 1,
+            "competition_id": 1, "competition_name": 1
+        }).sort("date", -1).limit(limit_n)
+        out = []
+        for g in cur:
+            home = g.get("home") or {}
+            away = g.get("away") or {}
+            out.append({
+                "game_id": g.get("_id"),
+                "date_str": g.get("date"),
+                "home_club_id": home.get("club_id"),
+                "home_name": home.get("name"),
+                "away_club_id": away.get("club_id"),
+                "away_name": away.get("name"),
+                "home_club_goals": home.get("goals"),
+                "away_club_goals": away.get("goals"),
+                "competition_id": g.get("competition_id"),
+                "league_name": g.get("competition_name")
+            })
+        return out
+    rows, ms = run_mongo(_q)
+    return jsonify(dict(ms=ms, rows=rows, source="mongo"))
+
 # Club competitions for dropdown (with type)
 @app.get("/api/club/<int:cid>/competitions")
 def api_club_competitions(cid):
@@ -509,6 +728,33 @@ def api_club_competitions(cid):
     """
     rows, ms = run_sql(sql, (cid, cid))
     return jsonify(dict(ms=ms, rows=rows))
+
+# Mongo: Club competitions
+@app.get("/api/mongo/club/<int:cid>/competitions")
+def api_mongo_club_competitions(cid):
+    def _q(db):
+        cur = db.games.find({"$or": [{"home.club_id": int(cid)}, {"away.club_id": int(cid)}]}, {
+            "competition_id": 1, "competition_name": 1
+        })
+        comps = {}
+        # Fetch club document to identify its domestic league
+        club_doc = db.clubs.find_one({"club_id": int(cid)}, {"domestic_competition_id":1}) or {}
+        domestic_comp = club_doc.get("domestic_competition_id")
+        for g in cur:
+            cidv = g.get("competition_id")
+            if cidv is None: continue
+            if cidv not in comps:
+                comps[cidv] = {
+                    "competition_id": cidv,
+                    "competition_name": g.get("competition_name"),
+                    # Mark the club's domestic league for front-end preference
+                    "type": "domestic-league" if domestic_comp and cidv == domestic_comp else None
+                }
+        out = list(comps.values())
+        out.sort(key=lambda r: (r.get("competition_name") or str(r.get("competition_id"))))
+        return out
+    rows, ms = run_mongo(_q)
+    return jsonify(dict(ms=ms, rows=rows, source="mongo"))
 
 # Clubs total market value ranking
 @app.get("/api/clubs/market-ranking")
@@ -566,6 +812,32 @@ def api_clubs_market_ranking():
         """
         rows, ms = run_sql(sql, (limit_n,))
     return jsonify(dict(ms=ms, rows=rows))
+
+# Mongo: Clubs total market value ranking
+@app.get("/api/mongo/clubs/market-ranking")
+def api_mongo_clubs_market_ranking():
+    limit_n = min(max(int(request.args.get("limit", 100)), 1), 500)
+    comp = request.args.get("competition_id")
+    def _q(db):
+        # If a competition_id (domestic league) is provided, filter by a club's domestic_competition_id
+        if comp:
+            filt = {"domestic_competition_id": comp}
+        else:
+            filt = {"total_market_value_eur": {"$ne": None}}
+        cur = db.clubs.find(filt, {"club_id":1, "name":1, "total_market_value_eur":1}).sort("total_market_value_eur", -1).limit(limit_n)
+        rows = []
+        rank = 1
+        for d in cur:
+            rows.append({
+                "club_id": d.get("club_id"),
+                "name": d.get("name"),
+                "total_market_value_eur": d.get("total_market_value_eur"),
+                "market_value_rank": rank
+            })
+            rank += 1
+        return rows
+    rows, ms = run_mongo(_q)
+    return jsonify(dict(ms=ms, rows=rows, source="mongo"))
 
 # Club transfer ROI view
 @app.route("/club/roi")
@@ -644,6 +916,26 @@ def api_competitions():
     rows, ms = run_sql(sql)
     return jsonify(dict(ms=ms, rows=rows))
 
+# Mongo: Competitions list (distinct from games)
+@app.get("/api/mongo/competitions")
+def api_mongo_competitions():
+    def _q(db):
+        # get distinct competition_id and first name seen
+        cur = db.games.aggregate([
+            {"$group": {"_id": "$competition_id", "competition_name": {"$first": "$competition_name"}}},
+            {"$sort": {"competition_name": 1}}
+        ])
+        out = []
+        for d in cur:
+            out.append({
+                "competition_id": d.get("_id"),
+                "competition_name": d.get("competition_name"),
+                "type": None
+            })
+        return out
+    rows, ms = run_mongo(_q)
+    return jsonify(dict(ms=ms, rows=rows, source="mongo"))
+
 # Seasons for a competition (for Top Scorers season dropdown)
 @app.get("/api/competitions/<comp_id>/seasons")
 def api_competition_seasons(comp_id):
@@ -655,6 +947,16 @@ def api_competition_seasons(comp_id):
     """
     rows, ms = run_sql(sql, (comp_id,))
     return jsonify(dict(ms=ms, rows=rows))
+
+# Mongo: Seasons for a competition
+@app.get("/api/mongo/competitions/<comp_id>/seasons")
+def api_mongo_competition_seasons(comp_id):
+    def _q(db):
+        cur = db.games.find({"competition_id": comp_id}, {"season":1})
+        seasons = sorted({d.get("season") for d in cur if d.get("season")}, reverse=True)
+        return [{"season": s} for s in seasons]
+    rows, ms = run_mongo(_q)
+    return jsonify(dict(ms=ms, rows=rows, source="mongo"))
 
 # Matches by date
 @app.get("/api/matches/by-date")
@@ -683,9 +985,9 @@ def api_mongo_matches_by_date():
     sel_date = request.args.get("date")
     def _q(db):
         cur = db.games.find({"date": sel_date}, {
-            "competition_id": 1, "_id": 1,
+            "competition_id": 1, "competition_name": 1, "_id": 1,
             "home.club_id": 1, "home.name": 1, "home.goals": 1,
-            "away.club.id": 1, "away.name": 1, "away.goals": 1
+            "away.club_id": 1, "away.name": 1, "away.goals": 1
         })
         docs = list(cur)
         out = []
@@ -701,7 +1003,7 @@ def api_mongo_matches_by_date():
                 "away_club_id": away.get("club_id"),
                 "away_name": away.get("name"),
                 "away_club_goals": away.get("goals"),
-                "league_name": None
+                "league_name": d.get("competition_name")
             })
         return out
     rows, ms = run_mongo(_q)
@@ -740,6 +1042,27 @@ def api_top_market():
     rows, ms, perf = run_sql_ex(sql, (limit_k,))
     return jsonify(dict(ms=ms, rows=rows, perf=perf))
 
+# Mongo: Top market value players
+@app.get("/api/mongo/players/top-market")
+def api_mongo_top_market():
+    limit_k = min(max(int(request.args.get("k", 10)), 1), 50)
+    def _q(db):
+        cur = db.players.find({"market_value_eur": {"$ne": None}}, {
+            "player_id": 1, "name": 1, "market_value_eur": 1, "current_club_id": 1
+        }).sort("market_value_eur", -1).limit(limit_k)
+        out = []
+        for d in cur:
+            d.pop("_id", None)
+            out.append({
+                "player_id": d.get("player_id"),
+                "name": d.get("name"),
+                "market_value_eur": d.get("market_value_eur"),
+                "current_club_id": d.get("current_club_id")
+            })
+        return out
+    rows, ms = run_mongo(_q)
+    return jsonify(dict(ms=ms, rows=rows, source="mongo"))
+
 # Player search
 @app.get("/api/players/search")
 def api_players_search():
@@ -753,6 +1076,22 @@ def api_players_search():
     """
     rows, ms, perf = run_sql_ex(sql, (f"%{q}%",))
     return jsonify(dict(ms=ms, rows=rows, perf=perf))
+
+# Mongo: Player search
+@app.get("/api/mongo/players/search")
+def api_mongo_players_search():
+    q = request.args.get("q", "").strip()
+    def _q(db):
+        query = {}
+        if q:
+            query["name"] = {"$regex": q, "$options": "i"}
+        cur = db.players.find(query, {"player_id":1, "name":1}).sort("name", 1).limit(20)
+        out = []
+        for d in cur:
+            out.append({"player_id": d.get("player_id"), "name": d.get("name")})
+        return out
+    rows, ms = run_mongo(_q)
+    return jsonify(dict(ms=ms, rows=rows, source="mongo"))
 
 # Upload player image
 @app.post("/api/upload/player-image")
@@ -887,6 +1226,63 @@ def api_player_competitions(pid):
     rows, ms = run_sql(sql, (pid,))
     return jsonify(dict(ms=ms, rows=rows))
 
+# Mongo: Player career transfers
+@app.get("/api/mongo/player/<int:pid>/career")
+def api_mongo_player_career(pid):
+    def _q(db):
+        cur = db.transfers.find({"player_id": int(pid), "transfer_fee": {"$ne": None}}, {
+            "transfer_date": 1, "transfer_season": 1, "from.club_id": 1, "from.name": 1,
+            "to.club_id": 1, "to.name": 1, "transfer_fee": 1, "market_value_in_eur": 1
+        }).sort("transfer_date", -1)
+        out = []
+        for d in cur:
+            out.append({
+                "transfer_date": d.get("transfer_date"),
+                "transfer_season": d.get("transfer_season"),
+                "from_club_id": (d.get("from") or {}).get("club_id"),
+                "from_club": (d.get("from") or {}).get("name"),
+                "to_club_id": (d.get("to") or {}).get("club_id"),
+                "to_club": (d.get("to") or {}).get("name"),
+                "transfer_fee": d.get("transfer_fee"),
+                "market_value_in_eur": d.get("market_value_in_eur")
+            })
+        return out
+    rows, ms = run_mongo(_q)
+    return jsonify(dict(ms=ms, rows=rows, source="mongo"))
+
+# Mongo: Player competitions
+@app.get("/api/mongo/players/<int:pid>/competitions")
+def api_mongo_player_competitions(pid):
+    def _q(db):
+        # Distinct competition IDs for this player
+        cur = db.player_seasons.find({"player_id": int(pid)}, {"competition_id": 1})
+        comp_ids = sorted({d.get("competition_id") for d in cur if d.get("competition_id")})
+        if not comp_ids:
+            return []
+        # Determine player's domestic league via current club
+        player_doc = db.players.find_one({"player_id": int(pid)}, {"current_club_id":1}) or {}
+        current_club_id = player_doc.get("current_club_id")
+        domestic_comp = None
+        if current_club_id is not None:
+            club_doc = db.clubs.find_one({"club_id": current_club_id}, {"domestic_competition_id":1}) or {}
+            domestic_comp = club_doc.get("domestic_competition_id")
+        # Fetch names from games (denormalized) – one sample per competition
+        name_map = {}
+        for g in db.games.find({"competition_id": {"$in": comp_ids}}, {"competition_id":1, "competition_name":1}):
+            cid = g.get("competition_id")
+            if cid is not None and cid not in name_map:
+                name_map[cid] = g.get("competition_name")
+        out = []
+        for cid in comp_ids:
+            out.append({
+                "competition_id": cid,
+                "competition_name": name_map.get(cid) or cid,
+                "competition_type": "domestic-league" if domestic_comp and cid == domestic_comp else None
+            })
+        return out
+    rows, ms = run_mongo(_q)
+    return jsonify(dict(ms=ms, rows=rows, source="mongo"))
+
 # Seasons for a player in a competition
 @app.get("/api/players/<int:pid>/seasons")
 def api_player_seasons(pid):
@@ -900,6 +1296,19 @@ def api_player_seasons(pid):
     """
     rows, ms = run_sql(sql, (pid, comp))
     return jsonify(dict(ms=ms, rows=rows))
+
+# Mongo: Seasons for a player in a competition
+@app.get("/api/mongo/players/<int:pid>/seasons")
+def api_mongo_player_seasons(pid):
+    comp = request.args.get("competition_id")
+    if not comp:
+        return jsonify(dict(error="competition_id required")), 400
+    def _q(db):
+        cur = db.player_seasons.find({"player_id": int(pid), "competition_id": comp}, {"season":1})
+        seasons = sorted({d.get("season") for d in cur if d.get("season")}, reverse=True)
+        return [{"season": s} for s in seasons]
+    rows, ms = run_mongo(_q)
+    return jsonify(dict(ms=ms, rows=rows, source="mongo"))
 
 @app.route("/player/profile")
 def player_profile_page():
@@ -921,6 +1330,24 @@ def api_player_profile(pid):
     rows, ms, perf = run_sql_ex(sql, (pid,))
     return jsonify(dict(ms=ms, row=rows[0] if rows else None, perf=perf))
 
+# Mongo: Player profile
+@app.get("/api/mongo/player/<int:pid>/profile")
+def api_mongo_player_profile(pid):
+    def _q(db):
+        doc = db.players.find_one({"player_id": int(pid)}, {
+            "player_id": 1, "name": 1, "position": 1, "sub_position": 1,
+            "current_club_id": 1, "current_club_name": 1,
+            "market_value_eur": 1, "highest_market_value_eur": 1,
+            "image_url": 1, "height_in_cm": 1, "dob": 1, "country_of_citizenship": 1,
+            "foot": 1, "city_of_birth": 1, "agent_name": 1, "contract_expiration_date": 1
+        }) or None
+        if not doc:
+            return None
+        doc.pop("_id", None)
+        return doc
+    row, ms = run_mongo(_q)
+    return jsonify(dict(ms=ms, row=row, source="mongo"))
+
 # Player season summary
 @app.get("/api/player/<int:pid>/season-summary")
 def api_player_season_summary(pid):
@@ -939,6 +1366,29 @@ def api_player_season_summary(pid):
     """
     rows, ms, perf = run_sql_ex(sql, (pid,))
     return jsonify(dict(ms=ms, rows=rows, perf=perf))
+
+# Mongo: Player season summary
+@app.get("/api/mongo/player/<int:pid>/season-summary")
+def api_mongo_player_season_summary(pid):
+    def _q(db):
+        cur = db.player_seasons.find({"player_id": int(pid)}, {"competition_id": 1, "season": 1, "totals": 1})
+        out = []
+        for d in cur:
+            t = d.get("totals", {})
+            out.append({
+                "competition_id": d.get("competition_id"),
+                "season": d.get("season"),
+                "apps": t.get("apps") or 0,
+                "minutes": t.get("minutes") or 0,
+                "goals": t.get("goals") or 0,
+                "assists": t.get("assists") or 0,
+                "yellows": t.get("yc") or 0,
+                "reds": t.get("rc") or 0
+            })
+        out.sort(key=lambda r: (r.get("season"), r.get("competition_id")), reverse=True)
+        return out
+    rows, ms = run_mongo(_q)
+    return jsonify(dict(ms=ms, rows=rows, source="mongo"))
 
 # Player matches
 @app.get("/api/player/<int:pid>/matches")
@@ -1086,6 +1536,66 @@ def api_market_compare():
 
   rows, ms = run_sql(sql, tuple(params))
   return jsonify(dict(ms=ms, rows=rows, category=category, value=value, limit=limit_n))
+
+# Mongo: market compare
+@app.get("/api/mongo/market-compare")
+def api_mongo_market_compare():
+    category = (request.args.get("category") or "").strip().lower()
+    value = request.args.get("value")
+    limit_n = min(max(int(request.args.get("limit", 100)), 1), 200)
+    allowed = {"age", "citizenship", "club", "position", "agent", "city"}
+    if category not in allowed or value is None or value == "":
+        return jsonify(dict(ms=0, rows=[], error="invalid-params")), 400
+    from datetime import date
+    today = date.today()
+    def compute_age(dob_str):
+        try:
+            if not dob_str:
+                return None
+            y, m, d = map(int, dob_str.split('-'))
+            age = today.year - y - ((today.month, today.day) < (m, d))
+            return age
+        except Exception:
+            return None
+    def _q(db):
+        cur = db.players.find({}, {"player_id":1,"name":1,"market_value_eur":1,"dob":1,"country_of_citizenship":1,"current_club_id":1,"position":1,"agent_name":1,"city_of_birth":1})
+        out = []
+        for d in cur:
+            if category == 'age':
+                try:
+                    target_age = int(value)
+                except ValueError:
+                    continue
+                age = compute_age(d.get('dob'))
+                if age is None or age != target_age:
+                    continue
+            elif category == 'citizenship':
+                if d.get('country_of_citizenship') != value:
+                    continue
+            elif category == 'club':
+                try:
+                    club_id = int(value)
+                except ValueError:
+                    continue
+                if d.get('current_club_id') != club_id:
+                    continue
+            elif category == 'position':
+                if d.get('position') != value:
+                    continue
+            elif category == 'agent':
+                if d.get('agent_name') != value:
+                    continue
+            elif category == 'city':
+                if d.get('city_of_birth') != value:
+                    continue
+            mv = d.get('market_value_eur')
+            if mv is None:
+                continue
+            out.append({"player_id": d.get("player_id"), "name": d.get("name"), "market_value_eur": mv})
+        out.sort(key=lambda r: (r.get('market_value_eur') or 0), reverse=True)
+        return out[:limit_n]
+    rows, ms = run_mongo(_q)
+    return jsonify(dict(ms=ms, rows=rows, category=category, value=value, limit=limit_n, source='mongo'))
 
 # Players list (SQL)
 @app.get("/api/players")

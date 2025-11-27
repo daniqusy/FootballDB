@@ -489,7 +489,12 @@
   }
 
   async function loadTopMarket() {
-    const data = await fetchJSON("/api/players/top-market?k=10");
+    const source = document.getElementById("data-source").value;
+    const endpoint =
+      source === "mongo"
+        ? "/api/mongo/players/top-market"
+        : "/api/players/top-market";
+    const data = await fetchJSON(endpoint + "?k=10");
     const ul = document.getElementById("top-market");
     const meta = document.getElementById("market-meta");
     ul.innerHTML = "";
@@ -508,13 +513,15 @@
                     <span class="badge text-bg-success">€${val}</span>`;
       ul.appendChild(li);
     });
-    meta.innerHTML = `Query time: ${data.ms} ms ${
-      data.perf
+    meta.innerHTML = `Source: ${source.toUpperCase()} • Query time: ${
+      data.ms
+    } ms ${
+      data.perf && source === "sql"
         ? '<button id="top-perf-more" class="btn btn-link btn-sm p-0 align-baseline">More…</button>'
         : ""
     }`;
     const btn = document.getElementById("top-perf-more");
-    if (btn && data.perf) {
+    if (btn && data.perf && source === "sql") {
       btn.addEventListener("click", () =>
         openPerfModal(
           "Top market values",
@@ -703,6 +710,8 @@
       if (document.getElementById("match-date").value) {
         await loadMatches(document.getElementById("match-date").value);
       }
+      // reload top market values with new source
+      loadTopMarket();
     });
 
   // Compare toggle rerun

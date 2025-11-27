@@ -25,6 +25,18 @@ def ensure_indexes():
     mdb.player_seasons.create_index([("player_id", 1), ("competition_id", 1), ("season", -1)])
     mdb.transfers.create_index([("player_id", 1), ("transfer_date", -1)])
     mdb.transfers.create_index([("to.club_id", 1), ("transfer_season", -1)])
+    # Players collection indexes (added for profile + market compare queries)
+    mdb.players.create_index([("player_id", 1)], unique=True)
+    mdb.players.create_index([("market_value_eur", -1)])
+    mdb.players.create_index([("position", 1)])
+    mdb.players.create_index([("current_club_id", 1)])
+    mdb.players.create_index([("country_of_citizenship", 1)])
+    mdb.players.create_index([("agent_name", 1)])
+    mdb.players.create_index([("city_of_birth", 1)])
+    # Clubs collection indexes (for Mongo club endpoints)
+    mdb.clubs.create_index([("club_id", 1)], unique=True)
+    mdb.clubs.create_index([("name", 1)])
+    mdb.clubs.create_index([("total_market_value_eur", -1)])
 
 def fetchall(cur, q, args=None):
     cur.execute(q, args or ())
@@ -49,46 +61,85 @@ def sanitize(obj):
     return [sanitize(v) for v in obj]
   return _to_plain(obj)
 
+# Safe date formatting helper (handles already-string dates, date/datetime objects, or None)
+def fmt_date(value):
+  if not value:
+    return None
+  # If already a string (e.g., MySQL driver returned VARCHAR), normalize length to YYYY-MM-DD when possible
+  if isinstance(value, (str, bytes)):
+    try:
+      if len(value) >= 10 and value[4] == '-' and value[7] == '-':
+        return value[:10]
+    except Exception:
+      pass
+    return value
+  # Attempt strftime on date/datetime objects
+  try:
+    return value.strftime('%Y-%m-%d')
+  except Exception:
+    return str(value)
+
 # --- ETL: Games ---
 def upsert_games(batch=1000):
     print("ETL games...")
     t0 = time.time()
     with sql.cursor() as cur:
         games = fetchall(cur, r"""
-          SELECT g.game_id, DATE_FORMAT(g.date,'%%Y-%%m-%%d') AS date,
-                 g.competition_id, g.season, g.round,
+          SELECT g.game_id,
+                 DATE_FORMAT(g.date,'%%Y-%%m-%%d') AS date,
+                 g.competition_id, c.name AS competition_name,
+                 g.season, g.round,
                  g.home_club_id, hc.name AS home_name, g.home_club_goals, g.home_club_formation,
+                 g.home_club_position, g.home_club_manager_name,
                  g.away_club_id, ac.name AS away_name, g.away_club_goals, g.away_club_formation,
-                 g.stadium, g.attendance, g.referee
+                 g.away_club_position, g.away_club_manager_name,
+                 g.stadium, g.attendance, g.referee,
+                 TIME_FORMAT(COALESCE(g.match_time,'00:00:00'),'%%H:%%i') AS match_time
           FROM game g
+          JOIN competition c ON c.competition_id=g.competition_id
           JOIN club hc ON hc.club_id=g.home_club_id
           JOIN club ac ON ac.club_id=g.away_club_id
         """)
     ops, n = [], 0
     with sql.cursor() as cur:
         for g in games:
-            evs = fetchall(cur, """
-              SELECT minute, type, club_id, player_id,
-                     player_in_id AS sub_in_id,
-                     player_assist_id AS assist_id,
-                     description AS event_desc
-              FROM game_events
-              WHERE game_id=%s
-              ORDER BY minute
+            evs = fetchall(cur, r"""
+              SELECT ge.minute,
+                     ge.type,
+                     ge.club_id,
+                     ge.player_id,
+                     p1.name AS player_name,
+                     ge.player_in_id AS sub_in_id,
+                     p2.name AS player_in_name,
+                     ge.player_assist_id AS assist_id,
+                     p3.name AS assist_name,
+                     ge.description AS event_desc
+              FROM game_events ge
+              LEFT JOIN player p1 ON p1.player_id = ge.player_id
+              LEFT JOIN player p2 ON p2.player_id = ge.player_in_id
+              LEFT JOIN player p3 ON p3.player_id = ge.player_assist_id
+              WHERE ge.game_id=%s
+              ORDER BY ge.minute, ge.game_event_id
             """, (g["game_id"],))
             doc = sanitize({
               "_id": g["game_id"],
               "date": g["date"],
               "competition_id": g["competition_id"],
+              "competition_name": g.get("competition_name"),
               "season": g["season"],
               "round": g["round"],
               "home": { "club_id": g["home_club_id"], "name": g["home_name"],
                         "goals": g["home_club_goals"],
-                        "formation": (g["home_club_formation"] or "").replace("/","-").strip() },
+                        "formation": (g["home_club_formation"] or "").replace("/","-").strip(),
+                        "position": g.get("home_club_position"),
+                        "manager_name": g.get("home_club_manager_name") },
               "away": { "club_id": g["away_club_id"], "name": g["away_name"],
                         "goals": g["away_club_goals"],
-                        "formation": (g["away_club_formation"] or "").replace("/","-").strip() },
+                        "formation": (g["away_club_formation"] or "").replace("/","-").strip(),
+                        "position": g.get("away_club_position"),
+                        "manager_name": g.get("away_club_manager_name") },
               "stadium": g["stadium"], "attendance": g["attendance"], "referee": g["referee"],
+              "match_time": g.get("match_time"),
               "events": sanitize(evs),
               "updated_at": int(time.time())
             })
@@ -126,6 +177,7 @@ def upsert_player_seasons(batch=1000):
                      a.minutes_played AS min,
                      a.goals AS g,
                      a.assists AS a,
+                     a.player_club_id AS player_club_id,
                      g.home_club_id,
                      hc.name AS home_name,
                      g.away_club_id,
@@ -193,24 +245,110 @@ def upsert_transfers(batch=2000):
     if ops: mdb.transfers.bulk_write(ops); n += len(ops)
     print(f"transfers upserts: {n} in {time.time()-t0:.1f}s")
 
+# --- ETL: Players (for Mongo player profile & market compare) ---
+def upsert_players(batch=2000):
+    print("ETL players...")
+    t0 = time.time()
+    with sql.cursor() as cur:
+        rows = fetchall(cur, r"""
+          SELECT p.player_id, p.name, p.position, p.sub_position,
+                 p.current_club_id, c.name AS current_club_name,
+                 p.market_value_eur, p.highest_market_value_eur,
+                 pb.image_url, pb.height_in_cm, pb.dob, pb.country_of_citizenship,
+                 pb.foot, pb.city_of_birth, pb.agent_name, pb.contract_expiration_date
+          FROM player p
+          LEFT JOIN club c ON c.club_id = p.current_club_id
+          LEFT JOIN player_bio pb ON pb.player_id = p.player_id
+        """)
+    ops, n = [], 0
+    for r in rows:
+        doc = sanitize({
+          "_id": r["player_id"],
+          "player_id": r["player_id"],
+          "name": r["name"],
+          "position": r["position"],
+          "sub_position": r.get("sub_position"),
+          "current_club_id": r.get("current_club_id"),
+          "current_club_name": r.get("current_club_name"),
+          "market_value_eur": r.get("market_value_eur"),
+          "highest_market_value_eur": r.get("highest_market_value_eur"),
+          "image_url": r.get("image_url"),
+          "height_in_cm": r.get("height_in_cm"),
+          "dob": fmt_date(r.get("dob")),
+          "country_of_citizenship": r.get("country_of_citizenship"),
+          "foot": r.get("foot"),
+          "city_of_birth": r.get("city_of_birth"),
+          "agent_name": r.get("agent_name"),
+          "contract_expiration_date": fmt_date(r.get("contract_expiration_date")),
+          "updated_at": int(time.time())
+        })
+        ops.append(UpdateOne({"_id": doc["_id"]}, {"$set": doc}, upsert=True))
+        if len(ops) >= batch:
+            mdb.players.bulk_write(ops); n += len(ops); ops = []
+    if ops:
+        mdb.players.bulk_write(ops); n += len(ops)
+    print(f"players upserts: {n} in {time.time()-t0:.1f}s")
+
+# --- ETL: Clubs (for Mongo club profile & listings) ---
+def upsert_clubs(batch=2000):
+    print("ETL clubs...")
+    t0 = time.time()
+    with sql.cursor() as cur:
+        rows = fetchall(cur, r"""
+          SELECT c.club_id, c.name, c.domestic_competition_id, c.squad_size, c.average_age,
+                 c.stadium_name, c.stadium_seats,
+                 COALESCE(SUM(p.market_value_eur),0) AS total_market_value_eur,
+                 COUNT(p.player_id) AS player_count
+          FROM club c
+          LEFT JOIN player p ON p.current_club_id = c.club_id AND p.market_value_eur IS NOT NULL
+          GROUP BY c.club_id, c.name, c.domestic_competition_id, c.squad_size, c.average_age, c.stadium_name, c.stadium_seats
+        """)
+    ops, n = [], 0
+    for r in rows:
+        doc = sanitize({
+          "_id": r["club_id"],
+          "club_id": r["club_id"],
+          "name": r.get("name"),
+          "domestic_competition_id": r.get("domestic_competition_id"),
+          "squad_size": r.get("squad_size"),
+          "average_age": r.get("average_age"),
+          "stadium_name": r.get("stadium_name"),
+          "stadium_seats": r.get("stadium_seats"),
+          "total_market_value_eur": r.get("total_market_value_eur"),
+          "player_count": r.get("player_count"),
+          "updated_at": int(time.time())
+        })
+        ops.append(UpdateOne({"_id": doc["_id"]}, {"$set": doc}, upsert=True))
+        if len(ops) >= batch:
+            mdb.clubs.bulk_write(ops); n += len(ops); ops = []
+    if ops:
+        mdb.clubs.bulk_write(ops); n += len(ops)
+    print(f"clubs upserts: {n} in {time.time()-t0:.1f}s")
+
 def main():
     ensure_indexes()
     ap = argparse.ArgumentParser()
     ap.add_argument("--games", action="store_true")
     ap.add_argument("--playerseasons", action="store_true")
     ap.add_argument("--transfers", action="store_true")
+    ap.add_argument("--players", action="store_true")
+    ap.add_argument("--clubs", action="store_true")
     args = ap.parse_args()
 
     # If no specific flag, run all
-    if not (args.games or args.playerseasons or args.transfers):
+    if not (args.games or args.playerseasons or args.transfers or args.players or args.clubs):
         upsert_games()
         upsert_player_seasons()
         upsert_transfers()
+        upsert_players()
+        upsert_clubs()
         return
 
     if args.games: upsert_games()
     if args.playerseasons: upsert_player_seasons()
     if args.transfers: upsert_transfers()
+    if args.players: upsert_players()
+    if args.clubs: upsert_clubs()
 
 if __name__ == "__main__":
     main()

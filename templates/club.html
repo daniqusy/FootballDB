@@ -10,8 +10,20 @@
       <div>
         <div id="club-name" class="h4 mb-1 fw-semibold">Club</div>
         <div class="text-muted small" id="club-meta"></div>
+        <div id="club-source-meta" class="small mt-1 text-muted"></div>
       </div>
-      <div class="d-flex align-items-center gap-2">
+      <div class="d-flex align-items-center gap-2 flex-wrap">
+        <div class="d-flex align-items-center gap-1">
+          <label for="club-source" class="small text-muted mb-0">Source</label>
+          <select
+            id="club-source"
+            class="form-select form-select-sm"
+            style="min-width: 110px"
+          >
+            <option value="sql" selected>SQL</option>
+            <option value="mongo">Mongo</option>
+          </select>
+        </div>
         <button
           id="view-ranking"
           class="btn btn-sm btn-outline-secondary d-none"
@@ -114,8 +126,12 @@
     return li;
   }
 
+  function getSource() {
+    return document.getElementById("club-source").value;
+  }
   async function loadClub(cid) {
-    const data = await fetchJSON(`/api/club/${cid}/profile`);
+    const base = getSource() === "mongo" ? "/api/mongo" : "/api";
+    const data = await fetchJSON(`${base}/club/${cid}/profile`);
     if (!data.row) {
       document.getElementById("club-name").textContent = "Club not found";
       return;
@@ -155,7 +171,8 @@
     const ul = document.getElementById("squad");
     const meta = document.getElementById("squad-meta");
     try {
-      const data = await fetchJSON(`/api/club/${cid}/players`);
+      const base = getSource() === "mongo" ? "/api/mongo" : "/api";
+      const data = await fetchJSON(`${base}/club/${cid}/players`);
       ul.innerHTML = "";
       if (!data.rows || !data.rows.length) {
         ul.innerHTML =
@@ -197,7 +214,10 @@
     try {
       const qs = new URLSearchParams({ limit: "12" });
       if (competitionId) qs.set("competition_id", competitionId);
-      const data = await fetchJSON(`/api/club/${cid}/matches?${qs.toString()}`);
+      const base = getSource() === "mongo" ? "/api/mongo" : "/api";
+      const data = await fetchJSON(
+        `${base}/club/${cid}/matches?${qs.toString()}`
+      );
       ul.innerHTML = "";
       if (!data.rows || !data.rows.length) {
         ul.innerHTML =
@@ -218,7 +238,8 @@
     const sel = document.getElementById("comp-select");
     sel.innerHTML = `<option value="">Loading…</option>`;
     try {
-      const data = await fetchJSON(`/api/club/${cid}/competitions`);
+      const base = getSource() === "mongo" ? "/api/mongo" : "/api";
+      const data = await fetchJSON(`${base}/club/${cid}/competitions`);
       const rows = data.rows || [];
       sel.innerHTML = "";
       if (!rows.length) {
@@ -250,22 +271,31 @@
     }
   }
 
+  function refreshAll() {
+    const cid = qs("club_id");
+    if (!cid) return;
+    loadClub(cid);
+    loadSquad(cid);
+    loadCompetitions(cid).then((defaultComp) => {
+      loadMatches(cid, defaultComp || undefined);
+      // Store default competition for ranking modal usage
+      const vr = document.getElementById("view-ranking");
+      if (vr) vr.dataset.defaultComp = defaultComp || "";
+    });
+  }
   (async function init() {
     const cid = qs("club_id");
     if (!cid) {
       alert("Missing club_id");
       return;
     }
-    await loadClub(cid);
-    await loadSquad(cid);
-    const defaultComp = await loadCompetitions(cid);
-    await loadMatches(cid, defaultComp || undefined);
-    // stash default competition for ranking modal default
-    const vr = document.getElementById("view-ranking");
-    if (vr) vr.dataset.defaultComp = defaultComp || "";
+    refreshAll();
     document.getElementById("comp-select").addEventListener("change", (e) => {
       const v = e.target.value || undefined;
       loadMatches(cid, v);
+    });
+    document.getElementById("club-source").addEventListener("change", () => {
+      refreshAll();
     });
   })();
 </script>
@@ -322,9 +352,12 @@
       try {
         const qs = new URLSearchParams({ limit: "200" });
         if (competitionId) qs.set("competition_id", competitionId);
-        const data = await fetchJSON(
-          "/api/clubs/market-ranking?" + qs.toString()
-        );
+        const source = getSource();
+        const rankBase =
+          source === "mongo"
+            ? "/api/mongo/clubs/market-ranking"
+            : "/api/clubs/market-ranking";
+        const data = await fetchJSON(rankBase + "?" + qs.toString());
         const rows = data.rows || [];
         body.innerHTML = "";
         rows.forEach((r) => {
@@ -355,8 +388,9 @@
       sel.innerHTML = `<option value="">All domestic leagues</option>`;
       try {
         // Limit to this club's own domestic league(s) only
+        const base = getSource() === "mongo" ? "/api/mongo" : "/api";
         const data = await fetchJSON(
-          `/api/club/${encodeURIComponent(clubId)}/competitions`
+          `${base}/club/${encodeURIComponent(clubId)}/competitions`
         );
         const leagues = (data.rows || []).filter((r) => {
           const t = (r.type || "").toLowerCase();

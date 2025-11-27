@@ -383,7 +383,9 @@
   }
 
   async function loadProfile() {
-    const prof = await J(`/api/player/${pid}/profile`);
+    const source = document.getElementById('pp-source').value;
+    const base = source === 'mongo' ? '/api/mongo/player' : '/api/player';
+    const prof = await J(`${base}/${pid}/profile`);
     const d = prof.row || {};
     document.getElementById("pp-name").textContent = d.name || pid;
     document.getElementById("pp-club").textContent = d.current_club_name || "";
@@ -431,7 +433,9 @@
 
   let seasonsByComp = {};
   async function loadSeasonSummary() {
-    const s = await J(`/api/player/${pid}/season-summary`);
+    const source = document.getElementById('pp-source').value;
+    const base = source === 'mongo' ? '/api/mongo/player' : '/api/player';
+    const s = await J(`${base}/${pid}/season-summary`);
     const compSel = document.getElementById("pp-comp");
     const seaSel = document.getElementById("pp-season");
     seasonsByComp = {};
@@ -445,7 +449,7 @@
         .reverse();
     });
     // Fetch competition names
-    const compRes = await J(`/api/players/${pid}/competitions`);
+  const compRes = await J(`${source === 'mongo' ? '/api/mongo/players' : '/api/players'}/${pid}/competitions`);
     const compMap = {}; // id -> name
     const typeMap = {}; // id -> type
     compRes.rows.forEach((c) => {
@@ -493,10 +497,11 @@
     const cid = document.getElementById("pp-comp").value;
     const sea = document.getElementById("pp-season").value;
     if (!cid || !sea) return;
-    const prof = await J(`/api/player/${pid}/profile`);
+    const sourceSel = document.getElementById('pp-source').value;
+    const baseProfile = sourceSel === 'mongo' ? '/api/mongo/player' : '/api/player';
+    const prof = await J(`${baseProfile}/${pid}/profile`);
     const playerClubName = prof.row?.current_club_name || "";
     const tb = document.getElementById("pp-matches");
-    const sourceSel = document.getElementById("pp-source").value;
     const compare = document.getElementById("pp-compare").checked;
     const baseUrl = sourceSel === 'mongo' ? '/api/mongo/player' : '/api/player';
     const res = await J(`${baseUrl}/${pid}/matches?competition_id=${cid}&season=${sea}`);
@@ -614,7 +619,9 @@
   }
 
   async function loadCareer() {
-    const c = await J(`/api/player/${pid}/career`);
+    const source = document.getElementById('pp-source').value;
+    const base = source === 'mongo' ? '/api/mongo/player' : '/api/player';
+    const c = await J(`${base}/${pid}/career`);
     const tb = document.getElementById("pp-career");
     const card = document.getElementById("career-card");
     tb.innerHTML = "";
@@ -644,7 +651,9 @@
     title.textContent = `Market value vs ${category}: ${label ?? value}`;
     body.innerHTML = `<tr><td colspan="3" class="text-center text-muted">Loading…</td></tr>`;
     try {
-      const data = await J(`/api/market-compare?category=${encodeURIComponent(category)}&value=${encodeURIComponent(value)}&limit=100`);
+      const source = document.getElementById('pp-source').value;
+      const base = source === 'mongo' ? '/api/mongo/market-compare' : '/api/market-compare';
+      const data = await J(`${base}?category=${encodeURIComponent(category)}&value=${encodeURIComponent(value)}&limit=100`);
       const rows = data.rows || [];
       if (!rows.length) {
         body.innerHTML = `<tr><td colspan="3" class="text-center text-muted">No data</td></tr>`;
@@ -663,7 +672,7 @@
           body.appendChild(tr);
         });
       }
-      meta.textContent = `Query time: ${data.ms} ms • ${rows.length} players`;
+  meta.textContent = `Source: ${source.toUpperCase()} • Query time: ${data.ms} ms • ${rows.length} players`;
     } catch (e) {
       body.innerHTML = `<tr><td colspan="3" class="text-center text-danger">Error loading data</td></tr>`;
       meta.textContent = "";
@@ -678,10 +687,14 @@
     await loadSeasonSummary();
     await loadMatches();
     await loadCareer();
-    // expose compare toggle
     document.getElementById('pp-compare-wrap').classList.remove('d-none');
     document.getElementById('pp-compare').addEventListener('change', loadMatches);
-    document.getElementById('pp-source').addEventListener('change', loadMatches);
+    document.getElementById('pp-source').addEventListener('change', async () => {
+      await loadProfile();
+      await loadSeasonSummary();
+      await loadMatches();
+      await loadCareer();
+    });
   })();
 
   // diff helper for player matches

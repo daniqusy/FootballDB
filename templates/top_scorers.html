@@ -1,6 +1,13 @@
 {% extends "base.html" %} {% block body %}
 <div class="container">
   <h1 class="h4 mb-3">Top Scorers</h1>
+  <div class="mb-2">
+    <label class="form-label me-2">Source</label>
+    <select id="ts-source" class="form-select d-inline-block w-auto">
+      <option value="sql">SQL</option>
+      <option value="mongo">Mongo</option>
+    </select>
+  </div>
 
   <form id="ts-form" class="row g-2 align-items-end">
     <div class="col-12 col-md-4">
@@ -58,6 +65,7 @@
         <tr>
           <th>#</th>
           <th>Player</th>
+          <th>Club</th>
           <th>Goals</th>
         </tr>
       </thead>
@@ -76,7 +84,10 @@
   const seasonSel = document.getElementById("season");
 
   async function loadCompetitions() {
-    const res = await fetch("/api/competitions");
+    const source = document.getElementById("ts-source").value;
+    const base =
+      source === "mongo" ? "/api/mongo/competitions" : "/api/competitions";
+    const res = await fetch(base);
     const data = await res.json();
     compSel.innerHTML = '<option value="">Select competition…</option>';
     const normalizeType = (t) =>
@@ -107,9 +118,12 @@
   }
 
   async function loadSeasons(competitionId) {
+    const source = document.getElementById("ts-source").value;
+    const base =
+      source === "mongo" ? "/api/mongo/competitions" : "/api/competitions";
     seasonSel.innerHTML = '<option value="">Loading seasons…</option>';
     const res = await fetch(
-      `/api/competitions/${encodeURIComponent(competitionId)}/seasons`
+      `${base}/${encodeURIComponent(competitionId)}/seasons`
     );
     const data = await res.json();
     seasonSel.innerHTML = '<option value="">Select season…</option>';
@@ -133,13 +147,20 @@
 
   async function loadPage(params) {
     const qs = new URLSearchParams(params).toString();
-    const res = await fetch("/api/top-scorers?" + qs);
+    const source = document.getElementById("ts-source").value;
+    const base =
+      source === "mongo" ? "/api/mongo/top-scorers" : "/api/top-scorers";
+    const res = await fetch(base + "?" + qs);
     const data = await res.json();
 
     const compName =
       compSel.options[compSel.selectedIndex]?.textContent ||
       params.competition_id;
-    meta.textContent = `Competition ${compName}, Season ${params.season} — Page ${data.page} — Query time: ${data.ms} ms`;
+    meta.textContent = `Competition ${compName}, Season ${
+      params.season
+    } — Page ${data.page} — Source: ${source.toUpperCase()} • Query time: ${
+      data.ms
+    } ms`;
     tbody.innerHTML = "";
     data.rows.forEach((r, idx) => {
       const tr = document.createElement("tr");
@@ -155,7 +176,15 @@
           onerror="this.style.display='none'" class="rounded-circle me-2">
         <a href="${href}" class="link-primary">${name}</a>
       </td>
+      <td>${r.club_name || ""}</td>
       <td>${r.goals}</td>`;
+      document
+        .getElementById("ts-source")
+        .addEventListener("change", async () => {
+          await loadCompetitions();
+          tbody.innerHTML = "";
+          meta.textContent = "";
+        });
       tbody.appendChild(tr);
     });
 
