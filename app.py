@@ -1012,231 +1012,7 @@ def api_mongo_club_roi():
         return rows
 
     rows, ms = run_mongo(_q)
-    return jsonify(dict(ms=ms, rows=rows, source="mongo", debug=debug))
-
-# Competitions list
-@app.get("/api/competitions")
-def api_competitions():
-    sql = """
-      SELECT DISTINCT c.competition_id, c.name AS competition_name, c.type
-      FROM competition c
-      ORDER BY c.name
-    """
-    rows, ms = run_sql(sql)
-    return jsonify(dict(ms=ms, rows=rows))
-
-# Mongo: Competitions list (distinct from games)
-@app.get("/api/mongo/competitions")
-def api_mongo_competitions():
-    def _q(db):
-        # get distinct competition_id and first name seen
-        cur = db.games.aggregate([
-            {"$group": {"_id": "$competition_id", "competition_name": {"$first": "$competition_name"}}},
-            {"$sort": {"competition_name": 1}}
-        ])
-        out = []
-        for d in cur:
-            out.append({
-                "competition_id": d.get("_id"),
-                "competition_name": d.get("competition_name"),
-                "type": None
-            })
-        return out
-    rows, ms = run_mongo(_q)
     return jsonify(dict(ms=ms, rows=rows, source="mongo"))
-
-# Seasons for a competition (for Top Scorers season dropdown)
-@app.get("/api/competitions/<comp_id>/seasons")
-def api_competition_seasons(comp_id):
-    sql = """
-      SELECT DISTINCT g.season
-      FROM game g
-      WHERE g.competition_id = %s
-      ORDER BY g.season DESC
-    """
-    rows, ms = run_sql(sql, (comp_id,))
-    return jsonify(dict(ms=ms, rows=rows))
-
-# Mongo: Seasons for a competition
-@app.get("/api/mongo/competitions/<comp_id>/seasons")
-def api_mongo_competition_seasons(comp_id):
-    def _q(db):
-        cur = db.games.find({"competition_id": comp_id}, {"season":1})
-        seasons = sorted({d.get("season") for d in cur if d.get("season")}, reverse=True)
-        return [{"season": s} for s in seasons]
-    rows, ms = run_mongo(_q)
-    return jsonify(dict(ms=ms, rows=rows, source="mongo"))
-
-# Matches by date
-@app.get("/api/matches/by-date")
-def api_matches_by_date():
-    sel_date = request.args.get("date")
-    sql = """
-      SELECT
-        g.competition_id                 AS league_id,
-        g.game_id,
-        g.home_club_id,  hc.name         AS home_name,
-        g.away_club_id,  ac.name         AS away_name,
-        g.home_club_goals, g.away_club_goals,
-        c.name                            AS league_name
-      FROM game g
-      JOIN club hc ON hc.club_id = g.home_club_id
-      JOIN club ac ON ac.club_id = g.away_club_id
-      JOIN competition c ON c.competition_id = g.competition_id
-      WHERE g.date = %s
-      ORDER BY g.competition_id, g.game_id
-    """
-    rows, ms, perf = run_sql_ex(sql, (sel_date,))
-    return jsonify(dict(ms=ms, rows=rows, date=sel_date, source="sql", perf=perf))
-
-@app.get("/api/mongo/matches/by-date")
-def api_mongo_matches_by_date():
-    sel_date = request.args.get("date")
-    def _q(db):
-        cur = db.games.find({"date": sel_date}, {
-            "competition_id": 1, "competition_name": 1, "_id": 1,
-            "home.club_id": 1, "home.name": 1, "home.goals": 1,
-            "away.club_id": 1, "away.name": 1, "away.goals": 1
-        })
-        docs = list(cur)
-        out = []
-        for d in docs:
-            home = d.get("home") or {}
-            away = d.get("away") or {}
-            out.append({
-                "league_id": d.get("competition_id"),
-                "game_id": d.get("_id"),
-                "home_club_id": home.get("club_id"),
-                "home_name": home.get("name"),
-                "home_club_goals": home.get("goals"),
-                "away_club_id": away.get("club_id"),
-                "away_name": away.get("name"),
-                "away_club_goals": away.get("goals"),
-                "league_name": d.get("competition_name")
-            })
-        return out
-    rows, ms = run_mongo(_q)
-    return jsonify(dict(ms=ms, rows=rows, date=sel_date, source="mongo"))
-
-# Max match date
-@app.get("/api/matches/max-date")
-def api_matches_max_date():
-  sql = "SELECT MAX(date) AS max_date FROM game"
-  rows, ms, perf = run_sql_ex(sql)
-  max_date = rows[0]['max_date'].strftime("%Y-%m-%d") if rows and rows[0]['max_date'] else None
-  return jsonify(dict(ms=ms, max_date=max_date, source="sql", perf=perf))
-
-@app.get("/api/mongo/matches/max-date")
-def api_mongo_matches_max_date():
-    def _q(db):
-        # dates are strings YYYY-MM-DD, max lex order matches chronological
-        doc = db.games.aggregate([{ "$group": { "_id": None, "max": { "$max": "$date" } } }])
-        res = list(doc)
-        return res[0].get("max") if res else None
-    max_date, ms = run_mongo(_q)
-    return jsonify(dict(ms=ms, max_date=max_date, source="mongo"))
-
-
-# Top market value players
-@app.get("/api/players/top-market")
-def api_top_market():
-    limit_k  = min(max(int(request.args.get("k", 10)), 1), 50)
-    sql = """
-      SELECT p.player_id, p.name, p.market_value_eur, p.current_club_id
-      FROM player p
-      WHERE p.market_value_eur IS NOT NULL
-      ORDER BY p.market_value_eur DESC
-      LIMIT %s
-    """
-    rows, ms, perf = run_sql_ex(sql, (limit_k,))
-    return jsonify(dict(ms=ms, rows=rows, perf=perf))
-
-# Mongo: Top market value players
-@app.get("/api/mongo/players/top-market")
-def api_mongo_top_market():
-    limit_k = min(max(int(request.args.get("k", 10)), 1), 50)
-    def _q(db):
-        cur = db.players.find({"market_value_eur": {"$ne": None}}, {
-            "player_id": 1, "name": 1, "market_value_eur": 1, "current_club_id": 1
-        }).sort("market_value_eur", -1).limit(limit_k)
-        out = []
-        for d in cur:
-            d.pop("_id", None)
-            out.append({
-                "player_id": d.get("player_id"),
-                "name": d.get("name"),
-                "market_value_eur": d.get("market_value_eur"),
-                "current_club_id": d.get("current_club_id")
-            })
-        return out
-    rows, ms = run_mongo(_q)
-    return jsonify(dict(ms=ms, rows=rows, source="mongo"))
-
-# Player search
-@app.get("/api/players/search")
-def api_players_search():
-    q = request.args.get("q","").strip()
-    sql = """
-      SELECT player_id, name
-      FROM player
-      WHERE name LIKE %s
-      ORDER BY name
-      LIMIT 20
-    """
-    rows, ms, perf = run_sql_ex(sql, (f"%{q}%",))
-    return jsonify(dict(ms=ms, rows=rows, perf=perf))
-
-# Mongo: Player search
-@app.get("/api/mongo/players/search")
-def api_mongo_players_search():
-    q = request.args.get("q", "").strip()
-    def _q(db):
-        query = {}
-        if q:
-            query["name"] = {"$regex": q, "$options": "i"}
-        cur = db.players.find(query, {"player_id":1, "name":1}).sort("name", 1).limit(20)
-        out = []
-        for d in cur:
-            out.append({"player_id": d.get("player_id"), "name": d.get("name")})
-        return out
-    rows, ms = run_mongo(_q)
-    return jsonify(dict(ms=ms, rows=rows, source="mongo"))
-
-# Upload player image
-@app.post("/api/upload/player-image")
-def api_upload_player_image():
-    try:
-        if 'file' not in request.files:
-            return jsonify({"error": "No file provided"}), 400
-        
-        file = request.files['file']
-        if file.filename == '':
-            return jsonify({"error": "No file selected"}), 400
-        
-        # Validate file is an image
-        if not file.content_type.startswith('image/'):
-            return jsonify({"error": "File must be an image"}), 400
-        
-        # Create uploads directory if it doesn't exist
-        upload_dir = os.path.join(os.path.dirname(__file__), 'uploads')
-        os.makedirs(upload_dir, exist_ok=True)
-        
-        # Generate unique filename
-        import uuid
-        ext = os.path.splitext(file.filename)[1]
-        filename = f"{uuid.uuid4()}{ext}"
-        filepath = os.path.join(upload_dir, filename)
-        
-        # Save file
-        file.save(filepath)
-        
-        # Return URL path (adjust based on your static file serving setup)
-        image_url = f"/uploads/{filename}"
-        
-        return jsonify({"image_url": image_url, "success": True}), 200
-        
-    except Exception as err:
-        return jsonify({"error": str(err), "details": repr(err)}), 500
 
 # Create player (POST)
 @app.post("/api/player")
@@ -1321,7 +1097,84 @@ def api_create_player():
     except Exception as err:
         return jsonify({"error": str(err), "details": repr(err)}), 500
 
-# Competitions for a player
+# Create player (POST to MongoDB)
+@app.post("/api/mongo/player")
+def api_mongo_create_player():
+    try:
+        data = request.get_json()
+        
+        # Validate required field
+        if not data.get("name"):
+            return jsonify({"error": "Name is required"}), 400
+        
+        # Player ID should be provided from SQL creation
+        player_id = data.get("player_id")
+        if not player_id:
+            return jsonify({"error": "Player ID is required"}), 400
+        
+        # Helper to sanitize Decimal values
+        def _to_plain(value):
+            from decimal import Decimal
+            if isinstance(value, Decimal):
+                try:
+                    if value == value.to_integral():
+                        return int(value)
+                except Exception:
+                    pass
+                return float(value)
+            return value
+        
+        # Helper for date formatting
+        def fmt_date(value):
+            if not value:
+                return None
+            if isinstance(value, (str, bytes)):
+                try:
+                    if len(value) >= 10 and value[4] == '-' and value[7] == '-':
+                        return value[:10]
+                except Exception:
+                    pass
+                return value
+            try:
+                return value.strftime('%Y-%m-%d')
+            except Exception:
+                return str(value)
+        
+        # Build MongoDB document
+        doc = {
+            "_id": player_id,
+            "player_id": player_id,
+            "name": data.get("name"),
+            "position": data.get("position") or None,
+            "sub_position": data.get("sub_position") or None,
+            "current_club_id": int(data.get("current_club_id")) if data.get("current_club_id") else None,
+            "current_club_name": None,
+            "market_value_eur": _to_plain(int(data.get("market_value_eur")) if data.get("market_value_eur") else None),
+            "highest_market_value_eur": _to_plain(int(data.get("highest_market_value_eur")) if data.get("highest_market_value_eur") else None),
+            "image_url": data.get("image_url") or None,
+            "height_in_cm": int(data.get("height_in_cm")) if data.get("height_in_cm") else None,
+            "dob": fmt_date(data.get("dob")),
+            "country_of_citizenship": data.get("country_of_citizenship") or None,
+            "foot": data.get("foot") or None,
+            "city_of_birth": data.get("city_of_birth") or None,
+            "agent_name": data.get("agent_name") or None,
+            "contract_expiration_date": fmt_date(data.get("contract_expiration_date")),
+            "updated_at": int(time.time())
+        }
+        
+        # Upsert into MongoDB (insert if new, update if exists)
+        mongo_db.players.update_one(
+            {"_id": player_id},
+            {"$set": doc},
+            upsert=True
+        )
+        
+        return jsonify({"player_id": player_id, "success": True}), 201
+        
+    except Exception as err:
+        return jsonify({"error": str(err), "details": repr(err)}), 500
+
+# Player competitions
 @app.get("/api/players/<int:pid>/competitions")
 def api_player_competitions(pid):
     sql = """
@@ -1582,10 +1435,6 @@ def api_player_career(pid):
       WHERE t.player_id=%s AND t.transfer_fee IS NOT NULL
       ORDER BY t.transfer_date DESC
     """
-    rows, ms = run_sql(sql, (pid,))
-    return jsonify(dict(ms=ms, rows=rows))
-
-# Market value comparison by category
 @app.get("/api/market-compare")
 def api_market_compare():
   category = (request.args.get("category") or "").strip().lower()
@@ -1794,6 +1643,7 @@ def api_player_edit(pid):
       SELECT p.player_id, p.name, p.first_name, p.last_name, p.position, p.sub_position,
              p.current_club_id, c.name AS current_club_name,
              p.market_value_eur, p.highest_market_value_eur,
+            
              pb.image_url, pb.height_in_cm, pb.dob, pb.country_of_citizenship, pb.foot, 
              pb.city_of_birth, pb.country_of_birth, pb.agent_name, pb.contract_expiration_date
       FROM player p
@@ -1886,6 +1736,45 @@ def api_update_player(pid):
             contract_exp or None,
             pid
         ))
+        
+        # UPDATE MONGODB DOCUMENT
+        def fmt_date(value):
+            if not value:
+                return None
+            if isinstance(value, (str, bytes)):
+                try:
+                    if len(value) >= 10 and value[4] == '-' and value[7] == '-':
+                        return value[:10]
+                except Exception:
+                    pass
+                return value
+            try:
+                return value.strftime('%Y-%m-%d')
+            except Exception:
+                return str(value)
+        
+        mongo_update_doc = {
+            "name": data.get("name"),
+            "position": data.get("position") or None,
+            "sub_position": data.get("sub_position") or None,
+            "current_club_id": int(data.get("current_club_id")) if data.get("current_club_id") else None,
+            "market_value_eur": int(data.get("market_value_eur")) if data.get("market_value_eur") else None,
+            "highest_market_value_eur": int(data.get("highest_market_value_eur")) if data.get("highest_market_value_eur") else None,
+            "image_url": data.get("image_url") or None,
+            "height_in_cm": int(data.get("height_in_cm")) if data.get("height_in_cm") else None,
+            "dob": fmt_date(data.get("dob")),
+            "country_of_citizenship": data.get("country_of_citizenship") or None,
+            "foot": data.get("foot") or None,
+            "city_of_birth": data.get("city_of_birth") or None,
+            "agent_name": data.get("agent_name") or None,
+            "contract_expiration_date": fmt_date(data.get("contract_expiration_date")),
+            "updated_at": int(time.time())
+        }
+        mongo_db.players.update_one(
+            {"_id": pid},
+            {"$set": mongo_update_doc},
+            upsert=False
+        )
         
         return jsonify({"player_id": pid, "success": True}), 200
         
@@ -2160,6 +2049,42 @@ def api_upload_club_logo():
     except Exception as err:
         return jsonify({"error": str(err), "details": repr(err)}), 500
 
+# Upload player image
+@app.post("/api/upload/player-image")
+def api_upload_player_image():
+    try:
+        if 'file' not in request.files:
+            return jsonify({"error": "No file provided"}), 400
+        
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({"error": "No file selected"}), 400
+        
+        # Validate file is an image
+        if not file.content_type.startswith('image/'):
+            return jsonify({"error": "File must be an image"}), 400
+        
+        # Create uploads directory if it doesn't exist
+        upload_dir = os.path.join(os.path.dirname(__file__), 'uploads')
+        os.makedirs(upload_dir, exist_ok=True)
+        
+        # Generate unique filename
+        import uuid
+        ext = os.path.splitext(file.filename)[1]
+        filename = f"{uuid.uuid4()}{ext}"
+        filepath = os.path.join(upload_dir, filename)
+        
+        # Save file
+        file.save(filepath)
+        
+        # Return URL path
+        image_url = f"/uploads/{filename}"
+        
+        return jsonify({"image_url": image_url, "success": True}), 200
+        
+    except Exception as err:
+        return jsonify({"error": str(err), "details": repr(err)}), 500
+
 # Delete club
 @app.delete("/api/club/<int:club_id>")
 def api_delete_club(club_id):
@@ -2295,6 +2220,7 @@ def api_mongo_games_list():
                 "attendance": g.get("attendance")
             })
         return out, total
+
     (rows, total), ms = run_mongo(_q)
     return jsonify(dict(ms=ms, rows=rows, page=page, page_size=page_size, total=total, source="mongo"))
 
@@ -3032,7 +2958,7 @@ def api_mongo_game_event_get(event_id):
         id_query_vals = [eid_int, event_id]
     except ValueError:
         id_query_vals = [event_id]
-    game_doc = mongo_db.games.find_one({"events.game_event_id": {"$in": id_query_vals}}, {"_id":1, "events":1})
+    game_doc = mongo_db.games.find_one({"events.game_event_id": {"$in": id_query_vals}}, {"_id":1})
     if not game_doc:
         return jsonify({"error": "Event not found"}), 404
     for ev in game_doc.get("events", []):

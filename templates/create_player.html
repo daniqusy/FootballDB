@@ -65,12 +65,12 @@
 
     <div class="col-6 col-md-3">
       <label class="form-label">Current Value (EUR)</label>
-      <input class="form-control" id="market_value_eur" type="number" step="1000" placeholder="0" value="0" />
+      <input class="form-control" id="market_value_eur" type="number" placeholder="0" value="0" />
     </div>
 
     <div class="col-6 col-md-3">
       <label class="form-label">Highest Value (EUR)</label>
-      <input class="form-control" id="highest_market_value_eur" type="number" step="1000" placeholder="0" value="0" />
+      <input class="form-control" id="highest_market_value_eur" type="number" placeholder="0" value="0" />
     </div>
 
     <!-- SECTION 4: Personal Details -->
@@ -308,21 +308,51 @@
     resEl.className = "mt-3";
 
     try {
-      const resp = await fetch("/api/player", {
+      // POST to SQL endpoint
+      const resp1 = await fetch("/api/player", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
       });
-      const body = await resp.json();
-      if (!resp.ok) {
+      const body1 = await resp1.json();
+
+      if (!resp1.ok) {
         resEl.textContent =
-          "Error: " + (body.error || JSON.stringify(body)) +
-          (body.details ? " — " + body.details : "");
+          "SQL Error: " + (body1.error || JSON.stringify(body1)) +
+          (body1.details ? " — " + body1.details : "");
         resEl.className = "mt-3 text-danger";
-        console.error(body);
+        console.error(body1);
         return;
       }
-      resEl.innerHTML = `✓ Created player id: <strong>${body.player_id}</strong>`;
+
+      const playerId = body1.player_id;
+
+      // POST to MongoDB endpoint (same data structure + player_id)
+      const resp2 = await fetch("/api/mongo/player", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...data, player_id: playerId }),
+      });
+      const body2 = await resp2.json();
+
+      if (!resp2.ok) {
+        // Mongo insert failed, but SQL succeeded - warn user
+        resEl.innerHTML = `✓ Created player id: <strong>${playerId}</strong> (SQL only - Mongo failed: ${body2.error || "unknown error"})`;
+        resEl.className = "mt-3 text-warning";
+        document.getElementById("cpf").reset();
+        previewWrap.innerHTML = "";
+        uploadStatus.textContent = "";
+        uploadStatus.classList.remove("text-success");
+        chooseBtn.style.display = "inline-block";
+        changeBtn.style.display = "none";
+        imageUploaded = false;
+        document.getElementById("foot").value = "right";
+        document.getElementById("market_value_eur").value = "0";
+        document.getElementById("highest_market_value_eur").value = "0";
+        return;
+      }
+
+      resEl.innerHTML = `✓ Created player id: <strong>${playerId}</strong> (SQL + MongoDB)`;
       resEl.className = "mt-3 text-success";
       document.getElementById("cpf").reset();
       previewWrap.innerHTML = "";
