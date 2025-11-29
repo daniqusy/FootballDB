@@ -79,6 +79,16 @@
     font-weight: 600;
   }
 
+  .source-badge {
+    display: inline-block;
+    padding: 0.15rem 0.4rem;
+    border-radius: 0.25rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+  }
+  .source-sql { background: #dcfce7; color: #166534; }
+  .source-mongo { background: #fed7aa; color: #92400e; }
+
   .subtle {
     color: var(--ink-500);
   }
@@ -150,14 +160,8 @@
       </div>
 
       <div class="d-flex gap-2 align-items-center ms-auto">
-        <a href="/club/create" class="btn btn-success btn-sm">+ Create Club</a>
-      </div>
-    </div>
-
-    <!-- Secondary Controls Row -->
-    <div class="controls">
-      <div class="d-flex gap-2 align-items-center ms-auto">
         <span class="subtle small" id="club-meta"></span>
+        <a href="/club/create" class="btn btn-success btn-sm">+ Create Club</a>
         <button id="club-refresh" class="btn btn-outline-secondary btn-sm">Refresh</button>
       </div>
     </div>

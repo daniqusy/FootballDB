@@ -128,6 +128,16 @@
     color: #991b1b;
   }
 
+  .source-badge {
+    display: inline-block;
+    padding: 0.15rem 0.4rem;
+    border-radius: 0.25rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+  }
+  .source-sql { background: #dcfce7; color: #166534; }
+  .source-mongo { background: #fed7aa; color: #92400e; }
+
   @media (max-width: 768px) {
     .controls {
       gap: 0.5rem;
@@ -146,21 +156,7 @@
 <div class="container py-4">
   <!-- Header -->
   <div class="appearance-table-header">
-    <div class="d-flex justify-content-between align-items-center mb-3">
-      <h1 class="h3 mb-0" style="font-weight: 800">Player Appearances</h1>
-      <div class="d-flex gap-2 align-items-center">
-        <span class="subtle small" id="appearance-meta"></span>
-        <a href="/appearance/create" class="btn btn-success btn-sm"
-          >+ Add Appearance</a
-        >
-        <button
-          id="appearance-refresh"
-          class="btn btn-outline-secondary btn-sm"
-        >
-          Refresh
-        </button>
-      </div>
-    </div>
+    <h1 class="h3 mb-3" style="font-weight: 800">Player Appearances</h1>
 
     <!-- Controls -->
     <div class="controls">
@@ -187,19 +183,29 @@
           <option value="mongo">Mongo</option>
         </select>
       </div>
-      <div class="d-flex gap-2 align-items-center">
-        <span class="subtle small">Page size:</span>
-        <select
-          id="appearance-page-size"
-          class="form-select form-select-sm"
-          style="min-width: 100px"
-        >
-          <option value="10">10</option>
-          <option value="20" selected>20</option>
-          <option value="50">50</option>
-          <option value="100">100</option>
-        </select>
+
+      <div class="d-flex gap-2 align-items-center ms-auto">
+        <span class="subtle small" id="appearance-meta"></span>
+        <a href="/appearance/create" class="btn btn-success btn-sm">+ Add Appearance</a>
+        <button id="appearance-refresh" class="btn btn-outline-secondary btn-sm">
+          Refresh
+        </button>
       </div>
+    </div>
+
+    <!-- Pagination controls -->
+    <div class="controls">
+      <span class="subtle small">Page size:</span>
+      <select
+        id="appearance-page-size"
+        class="form-select form-select-sm"
+        style="min-width: 100px"
+      >
+        <option value="10">10</option>
+        <option value="20" selected>20</option>
+        <option value="50">50</option>
+        <option value="100">100</option>
+      </select>
     </div>
   </div>
 
@@ -217,12 +223,13 @@
           <th class="text-center">Assists</th>
           <th class="text-center">YC</th>
           <th class="text-center">RC</th>
+          <th class="text-center">Source</th>
           <th class="text-center">Action</th>
         </tr>
       </thead>
       <tbody id="appearance-table-body">
         <tr>
-          <td colspan="10" class="text-center py-4">
+          <td colspan="11" class="text-center py-4">
             <div class="loading-spinner"></div>
             <div class="mt-2">Loading appearances...</div>
           </td>
@@ -270,7 +277,7 @@
     const search = document.getElementById("appearance-search").value.trim();
 
     const tbody = document.getElementById("appearance-table-body");
-    tbody.innerHTML = `<tr><td colspan="10" class="text-center py-4"><div class="loading-spinner"></div><div class="mt-2">Loading...</div></td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="11" class="text-center py-4"><div class="loading-spinner"></div><div class="mt-2">Loading...</div></td></tr>`;
 
     try {
       const baseRoot = source === "mongo" ? "/api/mongo" : "/api";
@@ -280,21 +287,21 @@
       const res = await J(url);
 
       currentPage = page;
-      renderTable(res);
+      renderTable(res, source);
       updatePagination(res, pageSize);
       updateMeta(res, source);
     } catch (err) {
-      tbody.innerHTML = `<tr><td colspan="10" class="text-center text-danger py-4">Error loading appearances</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="11" class="text-center text-danger py-4">Error loading appearances</td></tr>`;
       console.error(err);
     }
   }
 
-  function renderTable(res) {
+  function renderTable(res, source) {
     const tbody = document.getElementById("appearance-table-body");
     const rows = res.rows || [];
 
     if (rows.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="10" class="text-center py-4 text-muted">No appearances found</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="11" class="text-center py-4 text-muted">No appearances found</td></tr>`;
       return;
     }
 
@@ -321,6 +328,9 @@
         <td class="text-center"><span class="stats-badge stats-red">${
           row.red_cards || 0
         }</span></td>
+        <td class="text-center">
+          <span class="source-badge source-${source.toLowerCase()}">${source.toUpperCase()}</span>
+        </td>
         <td class="text-center">
           <a href="/appearance/edit?appearance_id=${
             row.appearance_id

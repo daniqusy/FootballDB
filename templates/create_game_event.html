@@ -35,21 +35,21 @@
     </div>
 
     <div class="col-12 col-md-6">
-      <label class="form-label">Club</label>
-      <div class="input-group">
-        <input class="form-control" id="club_name" placeholder="Search club..." autocomplete="off" />
-        <input type="hidden" id="club_id" />
-      </div>
-      <small id="club-search-results" class="form-text text-muted"></small>
-    </div>
-
-    <div class="col-12 col-md-6">
       <label class="form-label">Player</label>
       <div class="input-group">
         <input class="form-control" id="player_name" placeholder="Search player..." autocomplete="off" />
         <input type="hidden" id="player_id" />
       </div>
       <small id="player-search-results" class="form-text text-muted"></small>
+    </div>
+
+    <div class="col-12 col-md-6">
+      <label class="form-label">Club</label>
+      <div class="input-group">
+        <input class="form-control" id="club_name" placeholder="Search club..." autocomplete="off" />
+        <input type="hidden" id="club_id" />
+      </div>
+      <small id="club-search-results" class="form-text text-muted"></small>
     </div>
 
     <!-- SECTION 3: Related Players (for assists/substitutions) -->
@@ -121,7 +121,7 @@
   }
 
   // Generic search setup
-  function setupSearch(nameInputId, idInputId, resultsId, searchFn) {
+  function setupSearch(nameInputId, idInputId, resultsId, searchFn, onSelect) {
     let searchTimeout;
     document.getElementById(nameInputId).addEventListener("input", async (e) => {
       clearTimeout(searchTimeout);
@@ -152,9 +152,12 @@
         document.querySelectorAll(".search-option").forEach(btn => {
           btn.addEventListener("click", (e) => {
             e.preventDefault();
-            document.getElementById(nameInputId).value = btn.getAttribute("data-name");
-            document.getElementById(idInputId).value = btn.getAttribute("data-id");
+            const valId = btn.getAttribute("data-id");
+            const valName = btn.getAttribute("data-name");
+            document.getElementById(nameInputId).value = valName;
+            document.getElementById(idInputId).value = valId;
             resultsDiv.innerHTML = "";
+            if (onSelect) onSelect(valId, valName);
           });
         });
       }, 300);
@@ -163,7 +166,18 @@
 
   // Setup all search fields
   setupSearch("club_name", "club_id", "club-search-results", searchClubs);
-  setupSearch("player_name", "player_id", "player-search-results", searchPlayers);
+  setupSearch("player_name", "player_id", "player-search-results", searchPlayers, async (pid) => {
+    try {
+      const res = await fetch(`/api/player/${pid}/profile`);
+      const data = await res.json();
+      if (data.row && data.row.current_club_id) {
+        document.getElementById("club_id").value = data.row.current_club_id;
+        document.getElementById("club_name").value = data.row.current_club_name || "";
+      }
+    } catch (err) {
+      console.error("Error auto-filling club:", err);
+    }
+  });
   setupSearch("player_assist_name", "player_assist_id", "assist-search-results", searchPlayers);
   setupSearch("player_in_name", "player_in_id", "player-in-search-results", searchPlayers);
 

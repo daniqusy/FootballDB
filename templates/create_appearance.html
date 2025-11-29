@@ -217,6 +217,23 @@
   setupClubSearch("player_club_name", "player_club_id", "club-search-results");
   setupClubSearch("player_current_club_name", "player_current_club_id", "current-club-search-results");
 
+  // Auto-fill date when Game ID changes
+  document.getElementById("game_id").addEventListener("change", async (e) => {
+    const gameId = e.target.value;
+    if (!gameId) return;
+
+    try {
+      const res = await fetch(`/api/match?game_id=${gameId}`);
+      const data = await res.json();
+      
+      if (data.game && data.game.date_str) {
+        document.getElementById("date").value = data.game.date_str;
+      }
+    } catch (err) {
+      console.error("Failed to fetch game details:", err);
+    }
+  });
+
   document.getElementById("caf").addEventListener("submit", async (e) => {
     e.preventDefault();
     
