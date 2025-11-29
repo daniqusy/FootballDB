@@ -374,6 +374,7 @@ def api_mongo_top_scorers():
     page = max(int(request.args.get("page", 1)), 1)
     page_size = min(max(int(request.args.get("page_size", 20)), 1), 100)
     skip = (page - 1) * page_size
+    want_perf = (request.args.get("perf") == "1")
 
     def _q(db):
         query = {"competition_id": comp, "season": season}
@@ -396,7 +397,46 @@ def api_mongo_top_scorers():
             })
         return rows, total
     (rows, total), ms = run_mongo(_q)
-    return jsonify(dict(ms=ms, rows=rows, page=page, page_size=page_size, total=total, source="mongo"))
+    # Build perf object for UI consistency
+    try:
+        import json
+        perf = {
+            "query": json.dumps({
+                "find": "player_seasons",
+                "filter": {"competition_id": comp, "season": season, "totals.goals": {"$gt": 0}},
+                "sort": {"totals.goals": -1},
+                "skip": skip,
+                "limit": page_size,
+                "projection": {"player_id": 1, "totals.goals": 1}
+            }, ensure_ascii=False, indent=2),
+            "stats": {"docs_returned": len(rows), "total_docs": total}
+        }
+    except Exception:
+        perf = {"query": None, "stats": {"docs_returned": len(rows)}}
+
+    if want_perf:
+        try:
+            explain_out = mongo_db.command({
+                "explain": {
+                    "find": "player_seasons",
+                    "filter": {"competition_id": comp, "season": season, "totals.goals": {"$gt": 0}},
+                    "sort": {"totals.goals": -1},
+                    "skip": skip,
+                    "limit": page_size,
+                    "projection": {"player_id": 1, "totals.goals": 1}
+                },
+                "verbosity": "executionStats"
+            })
+            perf["explain"] = explain_out
+            totals = mongo_exec_stats_totals(explain_out)
+            if totals:
+                perf.setdefault("stats", {}).update(totals)
+        except Exception:
+            perf["explain"] = None
+    else:
+        perf["explain"] = None
+
+    return jsonify(dict(ms=ms, rows=rows, page=page, page_size=page_size, total=total, perf=perf, source="mongo"))
 
 # Match view
 @app.route("/match")
@@ -1177,6 +1217,7 @@ def api_mongo_club_roi():
     sort_by = request.args.get("sort_by","post_minutes")
     order   = -1 if request.args.get("order","desc").lower()=="desc" else 1
     debug = request.args.get("debug") == "1"
+    want_perf = (request.args.get("perf") == "1")
 
     def _q(db):
         flt = {"to.club_id": club_id}
@@ -1199,12 +1240,9 @@ def api_mongo_club_roi():
         apps_by_player = {}
         game_ids = set()
         if player_ids:
+            # Relax filter: pull all appearances for these players, then restrict by season/date later
             ap_cur = db.appearances.find({
-                "player_id": {"$in": player_ids},
-                "$or": [
-                    {"player_club_id": club_id},
-                    {"player_current_club_id": club_id}
-                ]
+                "player_id": {"$in": player_ids}
             }, {
                 "game_id": 1,
                 "player_id": 1,
@@ -1212,6 +1250,8 @@ def api_mongo_club_roi():
                 "goals": 1,
                 "assists": 1,
                 "date": 1,
+                "player_club_id": 1,
+                "player_current_club_id": 1,
             })
             for ap in ap_cur:
                 pid = ap.get("player_id")
@@ -1233,6 +1273,16 @@ def api_mongo_club_roi():
             except Exception:
                 return None
 
+        # Map season formats like '22/23' -> '2022' for game season matching
+        season_game_key = season
+        if season and '/' in season:
+            try:
+                part = season.split('/')[0]
+                if len(part) == 2 and part.isdigit():
+                    season_game_key = f"20{part}"
+            except Exception:
+                pass
+
         rows = []
         for t in transfers:
             pid = t.get("player_id")
@@ -1243,7 +1293,7 @@ def api_mongo_club_roi():
             # Post-transfer pass
             for ap in aps:
                 gid = ap.get("game_id")
-                if season and game_seasons.get(gid) != season:
+                if season and game_seasons.get(gid) not in (season, season_game_key):
                     continue
                 ap_date = parse_date(ap.get("date"))
                 if tdate and ap_date and ap_date < tdate:
@@ -1256,7 +1306,7 @@ def api_mongo_club_roi():
                 mins = goals = assists = 0
                 for ap in aps:
                     gid = ap.get("game_id")
-                    if season and game_seasons.get(gid) != season:
+                    if season and game_seasons.get(gid) not in (season, season_game_key):
                         continue
                     mins += int(ap.get("minutes_played") or 0)
                     goals += int(ap.get("goals") or 0)
@@ -1279,6 +1329,7 @@ def api_mongo_club_roi():
             if debug:
                 row["_debug_apps"] = len(aps)
                 row["_debug_transfer_date"] = t.get("transfer_date")
+                row["_debug_mapped_season"] = season_game_key
             rows.append(row)
 
         key_map = {
@@ -1295,7 +1346,84 @@ def api_mongo_club_roi():
         return rows
 
     rows, ms = run_mongo(_q)
-    return jsonify(dict(ms=ms, rows=rows, source="mongo", debug=debug))
+
+    # Build basic perf object (always include lightweight query description)
+    import json
+    perf = {
+        "query": json.dumps({
+            "transfers.match": {"to.club_id": club_id, **({"transfer_season": season} if season else {})},
+            "filter_fee_gt": 0,
+            "sort_by": sort_by,
+            "order": "desc" if order == -1 else "asc"
+        }, ensure_ascii=False, indent=2),
+        "stats": {"docs_returned": len(rows)}
+    }
+
+    if want_perf:
+        try:
+            # Construct aggregation pipeline analogous to Python logic for explain
+            match_stage = {"$match": {"to.club_id": club_id}}
+            if season:
+                match_stage["$match"]["transfer_season"] = season
+            pipeline = [
+                match_stage,
+                {"$match": {"transfer_fee": {"$gt": 0}}},
+                {"$lookup": {
+                    "from": "appearances",
+                    "localField": "player_id",
+                    "foreignField": "player_id",
+                    "as": "apps"
+                }},
+                {"$unwind": {"path": "$apps", "preserveNullAndEmptyArrays": False}},
+                {"$lookup": {
+                    "from": "games",
+                    "localField": "apps.game_id",
+                    "foreignField": "_id",
+                    "as": "g"
+                }},
+                {"$unwind": {"path": "$g", "preserveNullAndEmptyArrays": False}},
+            ]
+            # Season mapping (e.g. '24/25' -> '2024')
+            season_game_key = season
+            if season and '/' in season:
+                try:
+                    part = season.split('/')[0]
+                    if len(part) == 2 and part.isdigit():
+                        season_game_key = f"20{part}"
+                except Exception:
+                    pass
+            if season:
+                pipeline.append({"$match": {"$expr": {"$in": ["$g.season", [season, season_game_key]]}}})
+            # Post-transfer date filter
+            pipeline.append({"$match": {"$expr": {"$gte": ["$apps.date", "$transfer_date"]}}})
+            pipeline.append({"$group": {
+                "_id": "$player_id",
+                "post_minutes": {"$sum": {"$ifNull": ["$apps.minutes_played", 0]}},
+                "post_goals": {"$sum": {"$ifNull": ["$apps.goals", 0]}},
+                "post_assists": {"$sum": {"$ifNull": ["$apps.assists", 0]}},
+                "transfer_fee": {"$first": "$transfer_fee"},
+                "market_value_in_eur": {"$first": "$market_value_in_eur"},
+                "player_id": {"$first": "$player_id"},
+                "player_name": {"$first": "$player_name"}
+            }})
+            explain_out = mongo_db.command({
+                "explain": {
+                    "aggregate": "transfers",
+                    "pipeline": pipeline,
+                    "cursor": {}
+                },
+                "verbosity": "executionStats"
+            })
+            perf["explain"] = explain_out
+            totals = mongo_exec_stats_totals(explain_out)
+            if totals:
+                perf["stats"].update(totals)
+        except Exception:
+            perf["explain"] = None
+    else:
+        perf["explain"] = None
+
+    return jsonify(dict(ms=ms, rows=rows, perf=perf, source="mongo", debug=debug))
 
 # Competitions list
 @app.get("/api/competitions")

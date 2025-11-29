@@ -24,6 +24,15 @@
         <option value="mongo">Mongo</option>
       </select>
     </div>
+    <div class="col-6 col-md-2">
+      <label class="form-label">Compare</label>
+      <div class="form-check form-switch">
+        <input class="form-check-input" type="checkbox" id="roi-compare" />
+        <label class="form-check-label small" for="roi-compare"
+          >SQL vs Mongo</label
+        >
+      </div>
+    </div>
     <div class="col-12 col-md-2">
       <label class="form-label">Sort by</label>
       <select id="sort_by" class="form-select">
@@ -49,7 +58,21 @@
   </form>
 
   <div class="d-flex justify-content-between align-items-center mt-2">
-    <small id="roi-meta" class="text-muted"></small>
+    <div class="flex-grow-1">
+      <small id="roi-meta" class="text-muted"></small>
+      <div id="roi-meta-compare" class="mt-1" style="display: none">
+        <span id="roi-meta-sql"></span>
+        <span class="meta-sep">|</span>
+        <span id="roi-meta-mongo"></span>
+        <button
+          id="roi-perf-more"
+          class="btn btn-link btn-sm text-decoration-none ms-2"
+          style="display: none"
+        >
+          More…
+        </button>
+      </div>
+    </div>
   </div>
 
   <div class="table-responsive mt-2">
@@ -72,6 +95,8 @@
   </div>
 </div>
 
+<!-- Dynamic performance modal injected on demand -->
+
 <script>
   const clubName = document.getElementById("club-name");
   const clubIdEl = document.getElementById("club-id");
@@ -81,6 +106,17 @@
   const orderSel = document.getElementById("order");
   const bodyEl = document.getElementById("roi-body");
   const meta = document.getElementById("roi-meta");
+  const compareEl = document.getElementById("roi-compare");
+  const metaCompareWrap = document.getElementById("roi-meta-compare");
+  const metaSqlSpan = document.getElementById("roi-meta-sql");
+  const metaMongoSpan = document.getElementById("roi-meta-mongo");
+  const perfMoreBtn = document.getElementById("roi-perf-more");
+
+  let sqlMs = null,
+    mongoMs = null;
+  let sqlPerf = null,
+    mongoPerf = null;
+  let lastParams = null;
 
   let clubTypeTimer;
   clubName.addEventListener("input", () => {
@@ -143,11 +179,12 @@
     }).toString();
     const source = document.getElementById("roi-source").value;
     const root = source === "mongo" ? "/api/mongo" : "/api";
-    const data = await (await fetch(`${root}/club/roi?` + qs)).json();
-    const srcLabel = (data.source || source || "sql").toUpperCase();
-    meta.textContent = `Rows ${data.rows.length} — Query time: ${data.ms} ms — Source: ${srcLabel}`;
+    lastParams = qs;
+    const primary = await (await fetch(`${root}/club/roi?` + qs)).json();
+    const srcLabel = (primary.source || source || "sql").toUpperCase();
+    meta.textContent = `Rows ${primary.rows.length} — Query time: ${primary.ms} ms — Source: ${srcLabel}`;
     bodyEl.innerHTML = "";
-    data.rows.forEach((r, i) => {
+    primary.rows.forEach((r, i) => {
       const tr = document.createElement("tr");
       tr.innerHTML = `
       <td>${i + 1}</td>
@@ -163,11 +200,153 @@
       <td>${r.eur_per_contrib ?? "—"}</td>`;
       bodyEl.appendChild(tr);
     });
+    if (source === "sql") {
+      sqlMs = primary.ms;
+      sqlPerf = primary.perf || null;
+    } else {
+      mongoMs = primary.ms;
+      mongoPerf = primary.perf || null;
+    }
+
+    if (compareEl.checked) {
+      const otherRoot = source === "sql" ? "/api/mongo" : "/api";
+      try {
+        const other = await (await fetch(`${otherRoot}/club/roi?` + qs)).json();
+        if (source === "sql") {
+          mongoMs = other.ms;
+          mongoPerf = other.perf || null;
+        } else {
+          sqlMs = other.ms;
+          sqlPerf = other.perf || null;
+        }
+      } catch {}
+      updateCompareMeta();
+    } else {
+      metaCompareWrap.style.display = "none";
+    }
+    perfMoreBtn.style.display = compareEl.checked ? "inline-block" : "none";
+  }
+
+  function badge(ms, label, other) {
+    if (ms == null) return `<span class='meta-badge'>${label} —</span>`;
+    let clsExtra = "";
+    if (other != null) {
+      if (ms < other) clsExtra = "faster";
+      else if (ms > other) clsExtra = "slower";
+    }
+    return `<span class='meta-badge ${clsExtra}'>${label} ${ms} ms</span>`;
+  }
+
+  function updateCompareMeta() {
+    metaCompareWrap.style.display = "block";
+    metaSqlSpan.innerHTML = badge(sqlMs, "SQL", mongoMs);
+    metaMongoSpan.innerHTML = badge(mongoMs, "Mongo", sqlMs);
+  }
+
+  perfMoreBtn.addEventListener("click", async () => {
+    if (!lastParams) return;
+    // Fetch perf details with perf=1 lazily if missing explains
+    if (!sqlPerf || !sqlPerf.explain) {
+      try {
+        const r = await (
+          await fetch(`/api/club/roi?${lastParams}&perf=1`)
+        ).json();
+        sqlPerf = r.perf;
+        sqlMs = r.ms;
+      } catch {}
+    }
+    if (!mongoPerf || !mongoPerf.explain) {
+      try {
+        const r = await (
+          await fetch(`/api/mongo/club/roi?${lastParams}&perf=1`)
+        ).json();
+        mongoPerf = r.perf;
+        mongoMs = r.ms;
+      } catch {}
+    }
+    updateCompareMeta();
+    openClubRoiPerfModal({ perf: sqlPerf }, { perf: mongoPerf });
+  });
+
+  function safe(obj) {
+    try {
+      return JSON.stringify(obj, null, 2);
+    } catch {
+      return String(obj);
+    }
+  }
+
+  function openClubRoiPerfModal(sqlSection, mongoSection) {
+    const id = "club-roi-perf-modal";
+    let wrap = document.getElementById(id);
+    if (!wrap) {
+      wrap = document.createElement("div");
+      wrap.id = id;
+      wrap.className = "modal fade";
+      wrap.tabIndex = -1;
+      wrap.innerHTML = `<div class='modal-dialog modal-lg modal-dialog-scrollable'><div class='modal-content'><div class='modal-header'><h5 class='modal-title'>Club ROI Query Performance</h5><button type='button' class='btn-close' data-bs-dismiss='modal'></button></div><div class='modal-body'><div id='club-roi-perf-body'></div></div><div class='modal-footer'><button type='button' class='btn btn-secondary' data-bs-dismiss='modal'>Close</button></div></div></div>`;
+      document.body.appendChild(wrap);
+    }
+    const body = wrap.querySelector("#club-roi-perf-body");
+    const renderSQL = () => {
+      const p = sqlSection?.perf;
+      if (!p) return "";
+      return `<div class='mb-4'><h6 class='fw-semibold mb-2'>SQL</h6>
+        <table class='table table-sm'><tbody>
+          <tr><th style='width:180px'>Exec ms</th><td>${
+            p.execution_ms ?? "—"
+          }</td></tr>
+          <tr><th>Diag ms</th><td>${p.diagnostics_ms ?? "—"}</td></tr>
+          <tr><th>Rows examined</th><td>${p.rows_examined ?? "—"}</td></tr>
+          <tr><th>Rows sent</th><td>${p.rows_sent ?? "—"}</td></tr>
+          <tr><th>Explain type</th><td>${p.explain_type ?? "—"}</td></tr>
+        </tbody></table>
+        <div class='mb-3'><div class='fw-semibold'>Query</div><pre class='small bg-light p-2 rounded border' style='white-space:pre-wrap'>${
+          p.query || ""
+        }</pre></div>
+        <div class='mb-3'><div class='fw-semibold'>Explain</div><pre class='small bg-dark text-light p-2 rounded' style='max-height:240px;overflow:auto;white-space:pre-wrap'>${
+          p.explain || "No explain"
+        }</pre></div>
+      </div>`;
+    };
+    const renderMongo = () => {
+      const mp = mongoSection?.perf || {};
+      if (!mp || Object.keys(mp).length === 0) return "";
+      const statsRows = mp.stats
+        ? Object.keys(mp.stats)
+            .map(
+              (k) =>
+                `<tr><th style='width:180px'>${k}</th><td>${mp.stats[k]}</td></tr>`
+            )
+            .join("")
+        : "";
+      const q = mp.query
+        ? typeof mp.query === "string"
+          ? mp.query
+          : JSON.stringify(mp.query, null, 2)
+        : "";
+      const explainText = mp.explain
+        ? typeof mp.explain === "string"
+          ? mp.explain
+          : JSON.stringify(mp.explain, null, 2)
+        : "No explain";
+      return `<div class='mb-4'><h6 class='fw-semibold mb-2'>Mongo</h6>
+        <table class='table table-sm'><tbody>${statsRows}</tbody></table>
+        <div class='mb-3'><div class='fw-semibold'>Query</div><pre class='small bg-light p-2 rounded border' style='white-space:pre-wrap'>${q}</pre></div>
+        <div class='mb-3'><div class='fw-semibold'>Explain / Command Output</div><pre class='small bg-dark text-light p-2 rounded' style='max-height:240px;overflow:auto;white-space:pre-wrap'>${explainText}</pre></div>
+      </div>`;
+    };
+    body.innerHTML = renderSQL() + renderMongo();
+    bootstrap.Modal.getOrCreateInstance(wrap).show();
   }
 
   document.getElementById("go").addEventListener("click", async (e) => {
     e.preventDefault();
     await runROI();
+  });
+
+  compareEl.addEventListener("change", async () => {
+    if (lastParams) await runROI();
   });
 
   // Reload seasons when source changes (since endpoints differ)

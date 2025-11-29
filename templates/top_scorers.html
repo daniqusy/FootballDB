@@ -7,6 +7,21 @@
       <option value="sql">SQL</option>
       <option value="mongo">Mongo</option>
     </select>
+    <div
+      id="ts-compare-wrap"
+      class="form-check form-switch d-inline-block ms-3"
+      title="Compare SQL vs Mongo"
+    >
+      <input class="form-check-input" type="checkbox" id="ts-compare" />
+      <label class="form-check-label small" for="ts-compare">Compare</label>
+    </div>
+    <button
+      id="ts-perf-more"
+      class="btn btn-link btn-sm text-decoration-none ms-2"
+      style="display: none"
+    >
+      More…
+    </button>
   </div>
 
   <form id="ts-form" class="row g-2 align-items-end">
@@ -82,6 +97,11 @@
   const nextBtn = document.getElementById("next-btn");
   const compSel = document.getElementById("competition_id");
   const seasonSel = document.getElementById("season");
+  let tsPerfSQL = null,
+    tsPerfMongo = null;
+  let tsMsSQL = 0,
+    tsMsMongo = 0;
+  let tsLastQS = "";
 
   async function loadCompetitions() {
     const source = document.getElementById("ts-source").value;
@@ -148,19 +168,63 @@
   async function loadPage(params) {
     const qs = new URLSearchParams(params).toString();
     const source = document.getElementById("ts-source").value;
+    const compare = document.getElementById("ts-compare").checked;
     const base =
       source === "mongo" ? "/api/mongo/top-scorers" : "/api/top-scorers";
     const res = await fetch(base + "?" + qs);
     const data = await res.json();
+    tsLastQS = qs;
+    let other = null;
+    if (compare) {
+      const otherBase =
+        source === "sql" ? "/api/mongo/top-scorers" : "/api/top-scorers";
+      const r2 = await fetch(otherBase + "?" + qs);
+      other = await r2.json();
+    }
+    // store perf and ms
+    if (source === "sql") {
+      tsPerfSQL = data.perf;
+      tsMsSQL = data.ms;
+    } else {
+      tsPerfMongo = data.perf;
+      tsMsMongo = data.ms;
+    }
+    if (compare && other) {
+      if (source === "sql") {
+        tsPerfMongo = other.perf;
+        tsMsMongo = other.ms;
+      } else {
+        tsPerfSQL = other.perf;
+        tsMsSQL = other.ms;
+      }
+    }
 
     const compName =
       compSel.options[compSel.selectedIndex]?.textContent ||
       params.competition_id;
-    meta.textContent = `Competition ${compName}, Season ${
-      params.season
-    } — Page ${data.page} — Source: ${source.toUpperCase()} • Query time: ${
-      data.ms
-    } ms`;
+    if (compare && other) {
+      const aMs = data.ms,
+        bMs = other.ms;
+      const aFaster = Number(aMs) < Number(bMs);
+      const bFaster = Number(bMs) < Number(aMs);
+      const aClass = aFaster ? "faster" : bFaster ? "slower" : "";
+      const bClass = bFaster ? "faster" : aFaster ? "slower" : "";
+      meta.innerHTML = `Competition ${compName}, Season ${
+        params.season
+      } — Page ${
+        data.page
+      } — <span class='meta-badges'><span class='meta-badge ${aClass}'>${source.toUpperCase()} ${aMs} ms</span><span class='meta-sep'>|</span><span class='meta-badge ${bClass}'>${
+        source === "sql" ? "Mongo" : "SQL"
+      } ${bMs} ms</span></span>`;
+    } else {
+      meta.innerHTML = `Competition ${compName}, Season ${
+        params.season
+      } — Page ${
+        data.page
+      } — <span class='meta-badges'><span class='meta-badge'>${source.toUpperCase()} ${
+        data.ms
+      } ms</span></span>`;
+    }
     tbody.innerHTML = "";
     data.rows.forEach((r, idx) => {
       const tr = document.createElement("tr");
@@ -189,6 +253,31 @@
     });
 
     prevBtn.disabled = data.page <= 1;
+    // Perf button setup
+    const perfBtn = document.getElementById("ts-perf-more");
+    // Show the perf button after any successful run to allow lazy fetch
+    perfBtn.style.display = "";
+    perfBtn.onclick = async () => {
+      // Ensure SQL perf is present (fetch with current source if needed)
+      if (!tsPerfSQL) {
+        try {
+          const j = await fetch(`/api/top-scorers?${tsLastQS}&perf=1`).then(
+            (r) => r.json()
+          );
+          if (j.perf) tsPerfSQL = j.perf;
+        } catch {}
+      }
+      // Ensure Mongo perf is present; fetch explain + stats lazily
+      if (!tsPerfMongo || tsPerfMongo.explain == null) {
+        try {
+          const j = await fetch(
+            `/api/mongo/top-scorers?${tsLastQS}&perf=1`
+          ).then((r) => r.json());
+          if (j.perf) tsPerfMongo = j.perf;
+        } catch {}
+      }
+      openTopScorersPerfModal({ perf: tsPerfSQL }, { perf: tsPerfMongo });
+    };
   }
 
   form.addEventListener("submit", async (e) => {
@@ -246,5 +335,69 @@
       form.dispatchEvent(new Event("submit"));
     }
   })();
+
+  function openTopScorersPerfModal(sqlSection, mongoSection) {
+    const id = "ts-perf-modal";
+    let wrap = document.getElementById(id);
+    if (!wrap) {
+      wrap = document.createElement("div");
+      wrap.id = id;
+      wrap.className = "modal fade";
+      wrap.tabIndex = -1;
+      wrap.innerHTML = `<div class='modal-dialog modal-lg modal-dialog-scrollable'><div class='modal-content'><div class='modal-header'><h5 class='modal-title'>Top Scorers Query Performance</h5><button type='button' class='btn-close' data-bs-dismiss='modal'></button></div><div class='modal-body'><div id='ts-perf-body'></div></div><div class='modal-footer'><button type='button' class='btn btn-secondary' data-bs-dismiss='modal'>Close</button></div></div></div>`;
+      document.body.appendChild(wrap);
+    }
+    const body = wrap.querySelector("#ts-perf-body");
+    const renderSQL = () => {
+      const p = sqlSection?.perf;
+      if (!p) return "";
+      return `<div class='mb-4'><h6 class='fw-semibold mb-2'>SQL</h6>
+        <table class='table table-sm'><tbody>
+          <tr><th style='width:180px'>Exec ms</th><td>${
+            p.execution_ms ?? "—"
+          }</td></tr>
+          <tr><th>Diag ms</th><td>${p.diagnostics_ms ?? "—"}</td></tr>
+          <tr><th>Rows examined</th><td>${p.rows_examined ?? "—"}</td></tr>
+          <tr><th>Rows sent</th><td>${p.rows_sent ?? "—"}</td></tr>
+          <tr><th>Explain type</th><td>${p.explain_type ?? "—"}</td></tr>
+        </tbody></table>
+        <div class='mb-3'><div class='fw-semibold'>Query</div><pre class='small bg-light p-2 rounded border' style='white-space:pre-wrap'>${
+          p.query || ""
+        }</pre></div>
+        <div class='mb-3'><div class='fw-semibold'>Explain</div><pre class='small bg-dark text-light p-2 rounded' style='max-height:240px;overflow:auto;white-space:pre-wrap'>${
+          p.explain || "No explain"
+        }</pre></div>
+      </div>`;
+    };
+    const renderMongo = () => {
+      const mp = mongoSection?.perf || {};
+      if (!mp || Object.keys(mp).length === 0) return "";
+      const statsRows = mp.stats
+        ? Object.keys(mp.stats)
+            .map(
+              (k) =>
+                `<tr><th style='width:180px'>${k}</th><td>${mp.stats[k]}</td></tr>`
+            )
+            .join("")
+        : "";
+      const q = mp.query
+        ? typeof mp.query === "string"
+          ? mp.query
+          : JSON.stringify(mp.query, null, 2)
+        : "";
+      const explainText = mp.explain
+        ? typeof mp.explain === "string"
+          ? mp.explain
+          : JSON.stringify(mp.explain, null, 2)
+        : "No explain";
+      return `<div class='mb-4'><h6 class='fw-semibold mb-2'>Mongo</h6>
+        <table class='table table-sm'><tbody>${statsRows}</tbody></table>
+        <div class='mb-3'><div class='fw-semibold'>Query</div><pre class='small bg-light p-2 rounded border' style='white-space:pre-wrap'>${q}</pre></div>
+        <div class='mb-3'><div class='fw-semibold'>Explain / Command Output</div><pre class='small bg-dark text-light p-2 rounded' style='max-height:240px;overflow:auto;white-space:pre-wrap'>${explainText}</pre></div>
+      </div>`;
+    };
+    body.innerHTML = renderSQL() + renderMongo();
+    bootstrap.Modal.getOrCreateInstance(wrap).show();
+  }
 </script>
 {% endblock %}
