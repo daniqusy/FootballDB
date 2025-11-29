@@ -29,88 +29,126 @@ def run_sql(sql, params=()):
 
 # Extended SQL runner with performance diagnostics
 def run_sql_ex(sql, params=()):
-  """Execute SQL and collect performance diagnostics with separated timings.
+    """Execute SQL and collect performance diagnostics with separated timings.
 
-  Returns (rows, execution_ms, perf) where perf contains:
-    rows_examined, rows_sent, explain_type, explain, query_cache,
-    execution_ms, diagnostics_ms, total_ms.
-  """
-  perf = {
-    "rows_examined": None,
-    "rows_sent": None,
-    "explain_type": None,
-    "explain": None,
-    "query_cache": None,
-    "execution_ms": None,
-    "diagnostics_ms": None,
-    "total_ms": None,
-  }
-  t_total_start = time.perf_counter()
-  with pymysql.connect(**conn_args) as conn:
-    with conn.cursor() as cur:
-      # Capture before-status
-      try:
-        cur.execute("SHOW SESSION STATUS LIKE 'Rows_examined'")
-        rex_before = int((cur.fetchone() or {}).get('Value', 0))
-        cur.execute("SHOW SESSION STATUS LIKE 'Rows_sent'")
-        rse_before = int((cur.fetchone() or {}).get('Value', 0))
-      except Exception:
-        rex_before = rse_before = None
+    Returns (rows, execution_ms, perf) where perf contains:
+        rows_examined, rows_sent, explain_type, explain,
+        execution_ms, diagnostics_ms, total_ms.
+    (Query cache stats removed for simplicity.)
+    """
+    perf = {
+        "rows_examined": None,
+        "rows_sent": None,
+        "explain_type": None,
+        "explain": None,
+        "execution_ms": None,
+        "diagnostics_ms": None,
+        "total_ms": None,
+    }
+    t_total_start = time.perf_counter()
+    with pymysql.connect(**conn_args) as conn:
+        with conn.cursor() as cur:
+            # Capture before-status
+            try:
+                cur.execute("SHOW SESSION STATUS LIKE 'Rows_examined'")
+                rex_before = int((cur.fetchone() or {}).get('Value', 0))
+                cur.execute("SHOW SESSION STATUS LIKE 'Rows_sent'")
+                rse_before = int((cur.fetchone() or {}).get('Value', 0))
+            except Exception:
+                rex_before = rse_before = None
 
-      # Main query timing
-      t_exec_start = time.perf_counter()
-      cur.execute(sql, params)
-      rows = cur.fetchall()
-      perf["execution_ms"] = round((time.perf_counter() - t_exec_start) * 1000.0, 2)
+            # Main query timing
+            t_exec_start = time.perf_counter()
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+            perf["execution_ms"] = round((time.perf_counter() - t_exec_start) * 1000.0, 2)
 
-      # After-status deltas
-      try:
-        if rex_before is not None:
-          cur.execute("SHOW SESSION STATUS LIKE 'Rows_examined'")
-          rex_after = int((cur.fetchone() or {}).get('Value', 0))
-          perf["rows_examined"] = max(rex_after - rex_before, 0)
-        if rse_before is not None:
-          cur.execute("SHOW SESSION STATUS LIKE 'Rows_sent'")
-          rse_after = int((cur.fetchone() or {}).get('Value', 0))
-          perf["rows_sent"] = max(rse_after - rse_before, 0)
-      except Exception:
-        pass
+            # After-status deltas
+            try:
+                if rex_before is not None:
+                    cur.execute("SHOW SESSION STATUS LIKE 'Rows_examined'")
+                    rex_after = int((cur.fetchone() or {}).get('Value', 0))
+                    perf["rows_examined"] = max(rex_after - rex_before, 0)
+                if rse_before is not None:
+                    cur.execute("SHOW SESSION STATUS LIKE 'Rows_sent'")
+                    rse_after = int((cur.fetchone() or {}).get('Value', 0))
+                    perf["rows_sent"] = max(rse_after - rse_before, 0)
+            except Exception:
+                pass
 
-      # Diagnostics timing starts
-      t_diag_start = time.perf_counter()
-      explain_sql = f"EXPLAIN ANALYZE {sql}"
-      try:
-        cur.execute(explain_sql, params)
-        exp_rows = cur.fetchall()
-        txt = []
-        for r in exp_rows:
-          val = next(iter(r.values())) if isinstance(r, dict) else str(r)
-          if val is not None:
-            txt.append(str(val))
-        perf["explain_type"] = "analyze"
-        perf["explain"] = "\n".join(txt) if txt else None
-      except Exception:
+            # Diagnostics timing starts
+            t_diag_start = time.perf_counter()
+            explain_sql = f"EXPLAIN ANALYZE {sql}"
+            try:
+                cur.execute(explain_sql, params)
+                exp_rows = cur.fetchall()
+                txt = []
+                for r in exp_rows:
+                    val = next(iter(r.values())) if isinstance(r, dict) else str(r)
+                    if val is not None:
+                        txt.append(str(val))
+                perf["explain_type"] = "analyze"
+                perf["explain"] = "\n".join(txt) if txt else None
+            except Exception:
+                try:
+                    cur.execute(f"EXPLAIN FORMAT=JSON {sql}", params)
+                    exp = cur.fetchone()
+                    val = next(iter(exp.values())) if exp else None
+                    perf["explain_type"] = "json"
+                    perf["explain"] = val
+                except Exception:
+                    perf["explain_type"] = None
+                    perf["explain"] = None
+
+            perf["diagnostics_ms"] = round((time.perf_counter() - t_diag_start) * 1000.0, 2)
+        perf["total_ms"] = round((time.perf_counter() - t_total_start) * 1000.0, 2)
+        # Fallback: if rows_examined is 0 or None, try to estimate from EXPLAIN JSON
+        if not perf.get("rows_examined"):
+            try:
+                import json
+                exp = perf.get("explain")
+                if exp and perf.get("explain_type") == "json":
+                    ej = json.loads(exp) if isinstance(exp, str) else (exp if isinstance(exp, dict) else None)
+                    def sum_rows(node):
+                        if node is None:
+                            return 0
+                        total = 0
+                        if isinstance(node, dict):
+                            for k in ("rows", "rows_examined_per_scan", "rows_produced_per_join"):
+                                v = node.get(k)
+                                if isinstance(v, (int, float)):
+                                    total += int(v)
+                            for v in node.values():
+                                total += sum_rows(v)
+                        elif isinstance(node, list):
+                            for v in node:
+                                total += sum_rows(v)
+                        return total
+                    est = sum_rows(ej)
+                    if isinstance(est, (int, float)) and est > 0:
+                        perf["rows_examined"] = int(est)
+            except Exception:
+                pass
+        # Produce a display version of the SQL with parameters bound (for UI only)
         try:
-          cur.execute(f"EXPLAIN FORMAT=JSON {sql}", params)
-          exp = cur.fetchone()
-          val = next(iter(exp.values())) if exp else None
-          perf["explain_type"] = "json"
-          perf["explain"] = val
+            def _fmt_param(v):
+                if v is None:
+                    return 'NULL'
+                if isinstance(v, (int, float)):
+                    return str(v)
+                s = str(v).replace("'", "''")
+                return f"'{s}'"
+            parts = sql.split('%s')
+            bound_fragments = []
+            for i, part in enumerate(parts):
+                bound_fragments.append(part)
+                if i < len(params):
+                    bound_fragments.append(_fmt_param(params[i]))
+            perf["query"] = ''.join(bound_fragments)
         except Exception:
-          perf["explain_type"] = None
-          perf["explain"] = None
-
-      # Query cache stats
-      try:
-        cur.execute("SHOW STATUS LIKE 'Qcache_%'")
-        qrows = cur.fetchall() or []
-        perf["query_cache"] = {r.get('Variable_name'): r.get('Value') for r in qrows} or {"supported": False}
-      except Exception:
-        perf["query_cache"] = {"supported": False}
-      perf["diagnostics_ms"] = round((time.perf_counter() - t_diag_start) * 1000.0, 2)
-  perf["total_ms"] = round((time.perf_counter() - t_total_start) * 1000.0, 2)
-  # For backward compatibility ms returns execution time only
-  return rows, perf["execution_ms"], perf
+            perf["query"] = sql
+    # For backward compatibility ms returns execution time only
+    return rows, perf["execution_ms"], perf
 
 # Mongo connection for optional data source
 mongo_client = MongoClient(os.getenv("MONGO_URI", "mongodb://localhost:27017"))
@@ -121,6 +159,39 @@ def run_mongo(fn):
   result = fn(mongo_db)
   ms = round((time.perf_counter() - t0) * 1000.0, 2)
   return result, ms
+
+# Helper: extract execution stats totals from Mongo explain output (executionStats verbosity)
+def mongo_exec_stats_totals(explain_obj):
+    try:
+        es = explain_obj.get("executionStats") or {}
+        totals = {
+            "totalDocsExamined": es.get("totalDocsExamined"),
+            "totalKeysExamined": es.get("totalKeysExamined"),
+            "nReturned": es.get("nReturned"),
+            "executionTimeMillis": es.get("executionTimeMillis"),
+        }
+        # For aggregation explains, these might live under inputStage or children; attempt fallback drill
+        def drill(node, acc):
+            if not isinstance(node, dict):
+                return
+            for k in ("totalDocsExamined", "totalKeysExamined", "nReturned", "executionTimeMillis"):
+                v = node.get(k)
+                if acc.get(k) is None and isinstance(v, (int, float)):
+                    acc[k] = v
+            for child_k in ("inputStage", "outerStage", "innerStage", "stage", "winningPlan"):
+                if child_k in node:
+                    drill(node.get(child_k), acc)
+            # Explore children arrays
+            for v in node.values():
+                if isinstance(v, list):
+                    for it in v:
+                        drill(it, acc)
+                elif isinstance(v, dict):
+                    drill(v, acc)
+        drill(explain_obj, totals)
+        return {k: v for k, v in totals.items() if v is not None}
+    except Exception:
+        return {}
 
 @app.route("/")
 def index():
@@ -154,8 +225,8 @@ def api_player_form():
       WHERE a.player_id=%s AND g.competition_id=%s AND g.season=%s
       ORDER BY g.date DESC LIMIT %s
     """
-    rows, ms = run_sql(sql, (player_id, comp, season, n))
-    return jsonify(dict(ms=ms, rows=rows))
+    rows, ms, perf = run_sql_ex(sql, (player_id, comp, season, n))
+    return jsonify(dict(ms=ms, rows=rows, perf=perf))
 
 # Top scorers by league-season with pagination
 @app.route("/top-scorers")
@@ -191,8 +262,8 @@ def api_top_scorers():
             ORDER BY b.goals DESC
             LIMIT %s OFFSET %s
         """
-    rows, ms = run_sql(sql, (comp, season, page_size, offset))
-    return jsonify(dict(ms=ms, rows=rows, page=page, page_size=page_size))
+    rows, ms, perf = run_sql_ex(sql, (comp, season, page_size, offset))
+    return jsonify(dict(ms=ms, rows=rows, page=page, page_size=page_size, perf=perf))
 
 # Mongo: Top scorers by league-season with pagination (from player_seasons)
 @app.get("/api/mongo/top-scorers")
@@ -338,8 +409,8 @@ def api_match_edit(game_id):
       FROM game g
       WHERE g.game_id = %s
     """
-    rows, ms = run_sql(sql, (game_id,))
-    return jsonify(dict(ms=ms, row=rows[0] if rows else None))
+    rows, ms, perf = run_sql_ex(sql, (game_id,))
+    return jsonify(dict(ms=ms, row=rows[0] if rows else None, perf=perf))
 
 # Update match (POST)
 @app.post("/api/match/<int:game_id>/update")
@@ -449,7 +520,7 @@ def api_match():
     JOIN competition c ON c.competition_id = g.competition_id
     WHERE g.game_id = %s
     """
-    game, ms_game = run_sql(sql_game, (gid,))
+    game_rows, ms_game, perf_game = run_sql_ex(sql_game, (gid,))
     sql_ev = """
     SELECT
       ge.game_event_id,
@@ -473,14 +544,16 @@ def api_match():
     WHERE ge.game_id = %s
     ORDER BY ge.minute ASC, ge.game_event_id ASC
     """
-    events, ms_events = run_sql(sql_ev, (gid,))
+    event_rows, ms_events, perf_events = run_sql_ex(sql_ev, (gid,))
     total_ms = round((ms_game or 0) + (ms_events or 0), 2)
-    return jsonify(dict(game=(game[0] if game else None), events=events, ms=total_ms, ms_parts=dict(game=ms_game, events=ms_events), source="sql"))
+    perf = {"game": perf_game, "events": perf_events}
+    return jsonify(dict(game=(game_rows[0] if game_rows else None), events=event_rows, ms=total_ms, ms_parts=dict(game=ms_game, events=ms_events), perf=perf, source="sql"))
 
 # Mongo: Match details
 @app.get("/api/mongo/match")
 def api_mongo_match():
     gid = int(request.args.get("game_id"))
+    want_perf = (request.args.get("perf") == "1")
     def _q(db):
         doc = db.games.find_one({"_id": gid})
         return doc
@@ -532,7 +605,26 @@ def api_mongo_match():
             "player_in_name": ev.get("player_in_name"),
             "description": ev.get("event_desc"),
         })
-    return jsonify(dict(ms=ms, game=game, events=ev_rows, source="mongo"))
+    # Perf object (basic, explain only if requested)
+    import json
+    perf = {
+        "query": json.dumps({"find": "games", "filter": {"_id": gid}}, ensure_ascii=False, indent=2),
+        "stats": {"events_count": len(ev_rows)}
+    }
+    if want_perf:
+        try:
+            exp = mongo_db.command({
+                "explain": {"find": "games", "filter": {"_id": gid}, "limit": 1},
+                "verbosity": "executionStats"
+            })
+            perf["explain"] = exp
+            stats_extra = mongo_exec_stats_totals(exp)
+            perf["stats"].update(stats_extra)
+        except Exception:
+            perf["explain"] = None
+    else:
+        perf["explain"] = None
+    return jsonify(dict(ms=ms, game=game, events=ev_rows, perf=perf, source="mongo"))
 
 # Club page
 @app.route("/club")
@@ -561,12 +653,13 @@ def api_club_profile(cid):
             ) t
             WHERE t.club_id=%s
         """
-        rows, ms = run_sql(sql, (cid,))
-        return jsonify(dict(ms=ms, row=(rows[0] if rows else None)))
+        rows, ms, perf = run_sql_ex(sql, (cid,))
+        return jsonify(dict(ms=ms, row=(rows[0] if rows else None), perf=perf))
 
 # Mongo: Club profile
 @app.get("/api/mongo/club/<int:cid>/profile")
 def api_mongo_club_profile(cid):
+    want_perf = (request.args.get("perf") == "1")
     def _q(db):
         doc = db.clubs.find_one({"club_id": int(cid)}, {
             "club_id": 1, "name": 1, "average_age": 1,
@@ -587,7 +680,25 @@ def api_mongo_club_profile(cid):
         doc["clubs_ranked"] = total
         return doc
     row, ms = run_mongo(_q)
-    return jsonify(dict(ms=ms, row=row, source="mongo"))
+    # Perf object
+    import json
+    perf = {
+        "query": json.dumps({"find": "clubs", "filter": {"club_id": int(cid)}}, ensure_ascii=False, indent=2),
+        "stats": {"has_row": bool(row), "club_id": cid}
+    }
+    if want_perf:
+        try:
+            exp = mongo_db.command({
+                "explain": {"find": "clubs", "filter": {"club_id": int(cid)}, "limit": 1},
+                "verbosity": "executionStats"
+            })
+            perf["explain"] = exp
+            perf["stats"].update(mongo_exec_stats_totals(exp))
+        except Exception:
+            perf["explain"] = None
+    else:
+        perf["explain"] = None
+    return jsonify(dict(ms=ms, row=row, perf=perf, source="mongo"))
 
 # Club players (current squad by market value)
 @app.get("/api/club/<int:cid>/players")
@@ -601,12 +712,13 @@ def api_club_players(cid):
       ORDER BY p.market_value_eur DESC
       LIMIT 200
     """
-    rows, ms = run_sql(sql, (cid,))
-    return jsonify(dict(ms=ms, rows=rows))
+    rows, ms, perf = run_sql_ex(sql, (cid,))
+    return jsonify(dict(ms=ms, rows=rows, perf=perf))
 
 # Mongo: Club players
 @app.get("/api/mongo/club/<int:cid>/players")
 def api_mongo_club_players(cid):
+    want_perf = (request.args.get("perf") == "1")
     def _q(db):
         # Include players even if market_value_eur is null for parity with SQL endpoint
         cur = db.players.find({"current_club_id": int(cid)}, {
@@ -619,7 +731,29 @@ def api_mongo_club_players(cid):
             out.append(d)
         return out
     rows, ms = run_mongo(_q)
-    return jsonify(dict(ms=ms, rows=rows, source="mongo"))
+    import json
+    perf = {
+        "query": json.dumps({"find": "players", "filter": {"current_club_id": int(cid)}, "sort": {"market_value_eur": -1}, "limit": 200}, ensure_ascii=False, indent=2),
+        "stats": {"docs_returned": len(rows)}
+    }
+    if want_perf:
+        try:
+            exp = mongo_db.command({
+                "explain": {
+                    "find": "players",
+                    "filter": {"current_club_id": int(cid)},
+                    "sort": {"market_value_eur": -1},
+                    "limit": 200
+                },
+                "verbosity": "executionStats"
+            })
+            perf["explain"] = exp
+            perf["stats"].update(mongo_exec_stats_totals(exp))
+        except Exception:
+            perf["explain"] = None
+    else:
+        perf["explain"] = None
+    return jsonify(dict(ms=ms, rows=rows, perf=perf, source="mongo"))
 
 # Club recent matches
 @app.get("/api/club/<int:cid>/matches")
@@ -645,14 +779,15 @@ def api_club_matches(cid):
       params.append(comp)
     base += " ORDER BY g.date DESC LIMIT %s"
     params.append(limit_n)
-    rows, ms = run_sql(base, tuple(params))
-    return jsonify(dict(ms=ms, rows=rows))
+    rows, ms, perf = run_sql_ex(base, tuple(params))
+    return jsonify(dict(ms=ms, rows=rows, perf=perf))
 
 # Mongo: Club recent matches
 @app.get("/api/mongo/club/<int:cid>/matches")
 def api_mongo_club_matches(cid):
     limit_n = min(max(int(request.args.get("limit", 12)), 1), 100)
     comp = request.args.get("competition_id")
+    want_perf = (request.args.get("perf") == "1")
     def _q(db):
         q = {"$or": [{"home.club_id": int(cid)}, {"away.club_id": int(cid)}]}
         if comp:
@@ -681,7 +816,29 @@ def api_mongo_club_matches(cid):
             })
         return out
     rows, ms = run_mongo(_q)
-    return jsonify(dict(ms=ms, rows=rows, source="mongo"))
+    import json
+    perf = {
+        "query": json.dumps({"find": "games", "filter": ({"$or": [{"home.club_id": int(cid)}, {"away.club_id": int(cid)}], **({"competition_id": comp} if comp else {})}), "sort": {"date": -1}, "limit": limit_n}, ensure_ascii=False, indent=2),
+        "stats": {"docs_returned": len(rows)}
+    }
+    if want_perf:
+        try:
+            exp = mongo_db.command({
+                "explain": {
+                    "find": "games",
+                    "filter": ({"$or": [{"home.club_id": int(cid)}, {"away.club_id": int(cid)}], **({"competition_id": comp} if comp else {})}),
+                    "sort": {"date": -1},
+                    "limit": limit_n
+                },
+                "verbosity": "executionStats"
+            })
+            perf["explain"] = exp
+            perf["stats"].update(mongo_exec_stats_totals(exp))
+        except Exception:
+            perf["explain"] = None
+    else:
+        perf["explain"] = None
+    return jsonify(dict(ms=ms, rows=rows, perf=perf, source="mongo"))
 
 # Club competitions for dropdown (with type)
 @app.get("/api/club/<int:cid>/competitions")
@@ -693,12 +850,13 @@ def api_club_competitions(cid):
       WHERE g.home_club_id=%s OR g.away_club_id=%s
       ORDER BY c.name
     """
-    rows, ms = run_sql(sql, (cid, cid))
-    return jsonify(dict(ms=ms, rows=rows))
+    rows, ms, perf = run_sql_ex(sql, (cid, cid))
+    return jsonify(dict(ms=ms, rows=rows, perf=perf))
 
 # Mongo: Club competitions
 @app.get("/api/mongo/club/<int:cid>/competitions")
 def api_mongo_club_competitions(cid):
+    want_perf = (request.args.get("perf") == "1")
     def _q(db):
         cur = db.games.find({"$or": [{"home.club_id": int(cid)}, {"away.club_id": int(cid)}]}, {
             "competition_id": 1, "competition_name": 1
@@ -721,7 +879,31 @@ def api_mongo_club_competitions(cid):
         out.sort(key=lambda r: (r.get("competition_name") or str(r.get("competition_id"))))
         return out
     rows, ms = run_mongo(_q)
-    return jsonify(dict(ms=ms, rows=rows, source="mongo"))
+    import json
+    perf = {
+        "query": json.dumps({"distinct_competitions_for_club": cid}, ensure_ascii=False, indent=2),
+        "stats": {"competitions": len(rows)}
+    }
+    if want_perf:
+        try:
+            exp = mongo_db.command({
+                "explain": {
+                    "aggregate": "games",
+                    "pipeline": [
+                        {"$match": {"$or": [{"home.club_id": int(cid)}, {"away.club_id": int(cid)}]}},
+                        {"$group": {"_id": "$competition_id", "competition_name": {"$first": "$competition_name"}}}
+                    ],
+                    "cursor": {}
+                },
+                "verbosity": "executionStats"
+            })
+            perf["explain"] = exp
+            perf["stats"].update(mongo_exec_stats_totals(exp))
+        except Exception:
+            perf["explain"] = None
+    else:
+        perf["explain"] = None
+    return jsonify(dict(ms=ms, rows=rows, perf=perf, source="mongo"))
 
 # Clubs total market value ranking
 @app.get("/api/clubs/market-ranking")
@@ -756,7 +938,7 @@ def api_clubs_market_ranking():
           ORDER BY ct.total_market_value_eur DESC
           LIMIT %s
         """
-        rows, ms = run_sql(sql, (comp, comp, limit_n))
+        rows, ms, perf = run_sql_ex(sql, (comp, comp, limit_n))
     else:
         sql = """
           WITH club_totals AS (
@@ -777,8 +959,8 @@ def api_clubs_market_ranking():
           ORDER BY total_market_value_eur DESC
           LIMIT %s
         """
-        rows, ms = run_sql(sql, (limit_n,))
-    return jsonify(dict(ms=ms, rows=rows))
+        rows, ms, perf = run_sql_ex(sql, (limit_n,))
+    return jsonify(dict(ms=ms, rows=rows, perf=perf))
 
 # Mongo: Clubs total market value ranking
 @app.get("/api/mongo/clubs/market-ranking")
@@ -815,8 +997,8 @@ def club_roi_page():
 @app.get("/api/clubs")
 def api_clubs():
     sql = "SELECT club_id, name FROM club ORDER BY name"
-    rows, ms = run_sql(sql)
-    return jsonify(dict(ms=ms, rows=rows))
+    rows, ms, perf = run_sql_ex(sql)
+    return jsonify(dict(ms=ms, rows=rows, perf=perf))
 
 # Seasons a club bought players
 @app.get("/api/clubs/<int:club_id>/seasons")
@@ -827,8 +1009,8 @@ def api_club_seasons(club_id):
       WHERE to_club_id=%s
       ORDER BY season DESC
     """
-    rows, ms = run_sql(sql, (club_id,))
-    return jsonify(dict(ms=ms, rows=rows))
+    rows, ms, perf = run_sql_ex(sql, (club_id,))
+    return jsonify(dict(ms=ms, rows=rows, perf=perf))
 
 # Mongo: Seasons a club bought players
 @app.get("/api/mongo/clubs/<int:club_id>/seasons")
@@ -855,8 +1037,8 @@ def api_clubs_search():
       ORDER BY name
       LIMIT 20
     """
-    rows, ms = run_sql(sql, (f"%{q}%",))
-    return jsonify(dict(ms=ms, rows=rows))
+    rows, ms, perf = run_sql_ex(sql, (f"%{q}%",))
+    return jsonify(dict(ms=ms, rows=rows, perf=perf))
 
 # Club transfer ROI data
 @app.get("/api/club/roi")
@@ -876,15 +1058,15 @@ def api_club_roi():
       ORDER BY {sort_by} {order}
       LIMIT 200
     """
-    rows, ms = run_sql(sql, (club_id, season))
+    rows, ms, perf = run_sql_ex(sql, (club_id, season))
     if rows:
         ids = tuple({r["player_id"] for r in rows})
         in_clause = ",".join(["%s"]*len(ids))
         psql = f"SELECT player_id, name FROM player WHERE player_id IN ({in_clause})"
-        plist, _ = run_sql(psql, ids)
+        plist, _, perf_names = run_sql_ex(psql, ids)
         name_map = {p["player_id"]: p["name"] for p in plist}
         for r in rows: r["player_name"] = name_map.get(r["player_id"])
-    return jsonify(dict(ms=ms, rows=rows))
+    return jsonify(dict(ms=ms, rows=rows, perf=perf, perf_names=perf_names))
 
 # Mongo: Club transfer ROI data (basic from transfers collection)
 @app.get("/api/mongo/club/roi")
@@ -1022,8 +1204,8 @@ def api_competitions():
       FROM competition c
       ORDER BY c.name
     """
-    rows, ms = run_sql(sql)
-    return jsonify(dict(ms=ms, rows=rows))
+    rows, ms, perf = run_sql_ex(sql)
+    return jsonify(dict(ms=ms, rows=rows, perf=perf))
 
 # Mongo: Competitions list (distinct from games)
 @app.get("/api/mongo/competitions")
@@ -1054,8 +1236,8 @@ def api_competition_seasons(comp_id):
       WHERE g.competition_id = %s
       ORDER BY g.season DESC
     """
-    rows, ms = run_sql(sql, (comp_id,))
-    return jsonify(dict(ms=ms, rows=rows))
+    rows, ms, perf = run_sql_ex(sql, (comp_id,))
+    return jsonify(dict(ms=ms, rows=rows, perf=perf))
 
 # Mongo: Seasons for a competition
 @app.get("/api/mongo/competitions/<comp_id>/seasons")
@@ -1087,36 +1269,76 @@ def api_matches_by_date():
       ORDER BY g.competition_id, g.game_id
     """
     rows, ms, perf = run_sql_ex(sql, (sel_date,))
-    return jsonify(dict(ms=ms, rows=rows, date=sel_date, source="sql", perf=perf))
+    # Provide full SQL text with parameter bound as a literal for display purposes
+    # Note: This is for UI only; execution still uses parameterized query
+    try:
+        # Safely render date literal with single quotes
+        bound_sql = sql.replace("%s", f"'{sel_date}'")
+    except Exception:
+        bound_sql = sql
+    perf_out = dict(perf)
+    perf_out["query"] = bound_sql
+    return jsonify(dict(ms=ms, rows=rows, date=sel_date, source="sql", perf=perf_out))
 
 @app.get("/api/mongo/matches/by-date")
 def api_mongo_matches_by_date():
     sel_date = request.args.get("date")
-    def _q(db):
-        cur = db.games.find({"date": sel_date}, {
+    # Compute heavy perf diagnostics (explain) only when explicitly requested
+    want_perf = (request.args.get("perf") == "1")
+    # Manually time only the aggregate execution; gather perf separately
+    # Build pipeline so we can call explain for richer details
+    pipeline = [
+        {"$match": {"date": sel_date}},
+        {"$project": {
             "competition_id": 1, "competition_name": 1, "_id": 1,
-            "home.club_id": 1, "home.name": 1, "home.goals": 1,
-            "away.club_id": 1, "away.name": 1, "away.goals": 1
+            "home": 1, "away": 1
+        }},
+        {"$sort": {"competition_id": 1, "_id": 1}}
+    ]
+    # Execute aggregation for rows (timed)
+    t_exec_start = time.perf_counter()
+    try:
+        agg_cur = mongo_db.games.aggregate(pipeline, allowDiskUse=False, maxTimeMS=1500)
+        docs = list(agg_cur)
+    except Exception as err:
+        docs = []
+    exec_ms = round((time.perf_counter() - t_exec_start) * 1000.0, 2)
+    # Transform output
+    out = []
+    for d in docs:
+        home = d.get("home") or {}
+        away = d.get("away") or {}
+        out.append({
+            "league_id": d.get("competition_id"),
+            "game_id": d.get("_id"),
+            "home_club_id": home.get("club_id"),
+            "home_name": home.get("name"),
+            "home_club_goals": home.get("goals"),
+            "away_club_id": away.get("club_id"),
+            "away_name": away.get("name"),
+            "away_club_goals": away.get("goals"),
+            "league_name": d.get("competition_name")
         })
-        docs = list(cur)
-        out = []
-        for d in docs:
-            home = d.get("home") or {}
-            away = d.get("away") or {}
-            out.append({
-                "league_id": d.get("competition_id"),
-                "game_id": d.get("_id"),
-                "home_club_id": home.get("club_id"),
-                "home_name": home.get("name"),
-                "home_club_goals": home.get("goals"),
-                "away_club_id": away.get("club_id"),
-                "away_name": away.get("name"),
-                "away_club_goals": away.get("goals"),
-                "league_name": d.get("competition_name")
+    # Perf details (not counted in ms)
+    try:
+        import json
+        query_text = json.dumps(pipeline, ensure_ascii=False, indent=2)
+    except Exception:
+        query_text = str(pipeline)
+    explain = None
+    if want_perf:
+        try:
+            explain = mongo_db.command({
+                "explain": {"aggregate": "games", "pipeline": pipeline, "cursor": {}},
+                "verbosity": "executionStats"
             })
-        return out
-    rows, ms = run_mongo(_q)
-    return jsonify(dict(ms=ms, rows=rows, date=sel_date, source="mongo"))
+        except Exception:
+            explain = None
+    stats = {"docs_returned": len(out)}
+    stats.update(mongo_exec_stats_totals(explain or {}))
+    perf = {"explain": explain, "stats": stats, "query": query_text}
+    # Return execution time for query only
+    return jsonify(dict(ms=exec_ms, rows=out, date=sel_date, source="mongo", perf=perf))
 
 # Max match date
 @app.get("/api/matches/max-date")
@@ -1155,22 +1377,59 @@ def api_top_market():
 @app.get("/api/mongo/players/top-market")
 def api_mongo_top_market():
     limit_k = min(max(int(request.args.get("k", 10)), 1), 50)
-    def _q(db):
-        cur = db.players.find({"market_value_eur": {"$ne": None}}, {
-            "player_id": 1, "name": 1, "market_value_eur": 1, "current_club_id": 1
-        }).sort("market_value_eur", -1).limit(limit_k)
-        out = []
-        for d in cur:
-            d.pop("_id", None)
-            out.append({
-                "player_id": d.get("player_id"),
-                "name": d.get("name"),
-                "market_value_eur": d.get("market_value_eur"),
-                "current_club_id": d.get("current_club_id")
+    want_perf = (request.args.get("perf") == "1")
+    # Time only the find + sort + limit execution
+    t_exec_start = time.perf_counter()
+    try:
+        cursor = mongo_db.players.find(
+            {"market_value_eur": {"$ne": None}},
+            {"player_id": 1, "name": 1, "market_value_eur": 1, "current_club_id": 1}
+        ).sort("market_value_eur", -1).limit(limit_k)
+        docs = list(cursor)
+    except Exception:
+        docs = []
+    exec_ms = round((time.perf_counter() - t_exec_start) * 1000.0, 2)
+    rows = []
+    for d in docs:
+        d.pop("_id", None)
+        rows.append({
+            "player_id": d.get("player_id"),
+            "name": d.get("name"),
+            "market_value_eur": d.get("market_value_eur"),
+            "current_club_id": d.get("current_club_id"),
+        })
+    # Perf details (excluded from ms)
+    perf = {}
+    # Query description text
+    import json
+    query_desc = {
+        "filter": {"market_value_eur": {"$ne": None}},
+        "projection": ["player_id", "name", "market_value_eur", "current_club_id"],
+        "sort": {"market_value_eur": -1},
+        "limit": limit_k,
+    }
+    try:
+        perf["query"] = json.dumps(query_desc, ensure_ascii=False, indent=2)
+    except Exception:
+        perf["query"] = str(query_desc)
+    perf["stats"] = {"docs_returned": len(rows)}
+    if want_perf:
+        try:
+            exp = mongo_db.command({
+                "explain": {
+                    "find": "players",
+                    "filter": {"market_value_eur": {"$ne": None}},
+                    "projection": {"player_id": 1, "name": 1, "market_value_eur": 1, "current_club_id": 1},
+                    "sort": {"market_value_eur": -1},
+                    "limit": limit_k
+                },
+                "verbosity": "executionStats"
             })
-        return out
-    rows, ms = run_mongo(_q)
-    return jsonify(dict(ms=ms, rows=rows, source="mongo"))
+            perf["explain"] = exp
+            perf["stats"].update(mongo_exec_stats_totals(exp))
+        except Exception:
+            perf["explain"] = None
+    return jsonify(dict(ms=exec_ms, rows=rows, source="mongo", perf=perf))
 
 # Player search
 @app.get("/api/players/search")

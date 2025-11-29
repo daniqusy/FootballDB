@@ -6,36 +6,72 @@
 
   <!-- Club header -->
   <div class="card mb-3">
-    <div class="card-body d-flex align-items-center justify-content-between">
-      <div>
-        <div id="club-name" class="h4 mb-1 fw-semibold">Club</div>
-        <div class="text-muted small" id="club-meta"></div>
-        <div id="club-source-meta" class="small mt-1 text-muted"></div>
-      </div>
-      <div class="d-flex align-items-center gap-2 flex-wrap">
-        <div class="d-flex align-items-center gap-1">
-          <label for="club-source" class="small text-muted mb-0">Source</label>
-          <select
-            id="club-source"
-            class="form-select form-select-sm"
-            style="min-width: 110px"
-          >
-            <option value="sql" selected>SQL</option>
-            <option value="mongo">Mongo</option>
-          </select>
+    <div class="card-body">
+      <!-- Row 1: Title and club stats on left, ranking/ROI on right -->
+      <div
+        class="d-flex align-items-center justify-content-between flex-wrap gap-2"
+      >
+        <div>
+          <div id="club-name" class="h4 mb-1 fw-semibold">Club</div>
+          <div class="text-muted small" id="club-meta"></div>
+          <div id="club-source-meta" class="small mt-1 text-muted"></div>
         </div>
-        <button
-          id="view-ranking"
-          class="btn btn-sm btn-outline-secondary d-none"
-          type="button"
-          data-bs-toggle="modal"
-          data-bs-target="#clubRankModal"
-        >
-          View ranking
-        </button>
-        <a id="roi-link" class="btn btn-sm btn-outline-primary d-none" href="#"
-          >Transfer ROI</a
-        >
+        <div class="d-flex align-items-center gap-2 flex-wrap">
+          <button
+            id="view-ranking"
+            class="btn btn-sm btn-outline-secondary d-none"
+            type="button"
+            data-bs-toggle="modal"
+            data-bs-target="#clubRankModal"
+          >
+            View ranking
+          </button>
+          <a
+            id="roi-link"
+            class="btn btn-sm btn-outline-primary d-none"
+            href="#"
+          >
+            Transfer ROI
+          </a>
+        </div>
+      </div>
+      <!-- Row 2: Perf badges on left, Source/Compare/More on right -->
+      <div
+        class="d-flex align-items-center justify-content-between flex-wrap gap-2 mt-2"
+      >
+        <small id="club-perf-meta" class="text-muted"></small>
+        <div class="d-flex align-items-center gap-2 flex-wrap">
+          <div class="d-flex align-items-center gap-1">
+            <label for="club-source" class="small text-muted mb-0"
+              >Source</label
+            >
+            <select
+              id="club-source"
+              class="form-select form-select-sm"
+              style="min-width: 110px"
+            >
+              <option value="sql" selected>SQL</option>
+              <option value="mongo">Mongo</option>
+            </select>
+          </div>
+          <div
+            class="form-check form-switch"
+            id="club-compare-wrap"
+            title="Compare SQL vs Mongo"
+          >
+            <input class="form-check-input" type="checkbox" id="club-compare" />
+            <label class="form-check-label small" for="club-compare"
+              >Compare</label
+            >
+          </div>
+          <button
+            id="club-perf-more"
+            class="btn btn-link btn-sm p-0 text-decoration-none"
+            style="display: none"
+          >
+            More…
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -84,6 +120,21 @@
 </div>
 
 <script>
+  // Perf state holders
+  let clubPerfSQL = {
+    profile: null,
+    squad: null,
+    matches: null,
+    competitions: null,
+  };
+  let clubPerfMongo = {
+    profile: null,
+    squad: null,
+    matches: null,
+    competitions: null,
+  };
+  let lastSQLMs = { profile: 0, squad: 0, matches: 0, competitions: 0 };
+  let lastMongoMs = { profile: 0, squad: 0, matches: 0, competitions: 0 };
   function qs(key) {
     return new URLSearchParams(location.search).get(key);
   }
@@ -129,12 +180,30 @@
   function getSource() {
     return document.getElementById("club-source").value;
   }
-  async function loadClub(cid) {
+  async function loadClub(cid, compare = false) {
     const base = getSource() === "mongo" ? "/api/mongo" : "/api";
     const data = await fetchJSON(`${base}/club/${cid}/profile`);
     if (!data.row) {
       document.getElementById("club-name").textContent = "Club not found";
       return;
+    }
+    if (getSource() === "sql") {
+      clubPerfSQL.profile = data.perf;
+      lastSQLMs.profile = data.ms;
+    } else {
+      clubPerfMongo.profile = data.perf;
+      lastMongoMs.profile = data.ms;
+    }
+    if (compare) {
+      const otherBase = getSource() === "sql" ? "/api/mongo" : "/api";
+      const other = await fetchJSON(`${otherBase}/club/${cid}/profile`);
+      if (getSource() === "sql") {
+        clubPerfMongo.profile = other.perf;
+        lastMongoMs.profile = other.ms;
+      } else {
+        clubPerfSQL.profile = other.perf;
+        lastSQLMs.profile = other.ms;
+      }
     }
     document.getElementById("club-name").textContent =
       data.row.name || "Club " + cid;
@@ -167,12 +236,31 @@
     roi.classList.remove("d-none");
   }
 
-  async function loadSquad(cid) {
+  async function loadSquad(cid, compare = false) {
     const ul = document.getElementById("squad");
     const meta = document.getElementById("squad-meta");
     try {
       const base = getSource() === "mongo" ? "/api/mongo" : "/api";
       const data = await fetchJSON(`${base}/club/${cid}/players`);
+      if (getSource() === "sql") {
+        clubPerfSQL.squad = data.perf;
+        lastSQLMs.squad = data.ms;
+      } else {
+        clubPerfMongo.squad = data.perf;
+        lastMongoMs.squad = data.ms;
+      }
+      let other = null;
+      if (compare) {
+        const otherBase = getSource() === "sql" ? "/api/mongo" : "/api";
+        other = await fetchJSON(`${otherBase}/club/${cid}/players`);
+        if (getSource() === "sql") {
+          clubPerfMongo.squad = other.perf;
+          lastMongoMs.squad = other.ms;
+        } else {
+          clubPerfSQL.squad = other.perf;
+          lastSQLMs.squad = other.ms;
+        }
+      }
       ul.innerHTML = "";
       if (!data.rows || !data.rows.length) {
         ul.innerHTML =
@@ -200,7 +288,19 @@
           <span class="badge text-bg-success">€${val}</span>`;
         ul.appendChild(li);
       });
-      meta.textContent = `Count ${data.rows.length} — ${data.ms} ms`;
+      if (compare && other) {
+        const aFaster = Number(data.ms) < Number(other.ms);
+        const bFaster = Number(other.ms) < Number(data.ms);
+        const aClass = aFaster ? "faster" : bFaster ? "slower" : "";
+        const bClass = bFaster ? "faster" : aFaster ? "slower" : "";
+        meta.innerHTML = `<span class='meta-badges'><span class='meta-badge ${aClass}'>${getSource().toUpperCase()} ${
+          data.ms
+        } ms</span><span class='meta-sep'>|</span><span class='meta-badge ${bClass}'>${
+          getSource() === "sql" ? "Mongo" : "SQL"
+        } ${other.ms} ms</span></span>`;
+      } else {
+        meta.textContent = `Count ${data.rows.length} — ${data.ms} ms`;
+      }
     } catch (e) {
       ul.innerHTML =
         '<li class="list-group-item text-danger">Failed to load squad</li>';
@@ -208,7 +308,7 @@
     }
   }
 
-  async function loadMatches(cid, competitionId) {
+  async function loadMatches(cid, competitionId, compare = false) {
     const ul = document.getElementById("matches");
     const meta = document.getElementById("matches-meta");
     try {
@@ -218,6 +318,27 @@
       const data = await fetchJSON(
         `${base}/club/${cid}/matches?${qs.toString()}`
       );
+      if (getSource() === "sql") {
+        clubPerfSQL.matches = data.perf;
+        lastSQLMs.matches = data.ms;
+      } else {
+        clubPerfMongo.matches = data.perf;
+        lastMongoMs.matches = data.ms;
+      }
+      let other = null;
+      if (compare) {
+        const otherBase = getSource() === "sql" ? "/api/mongo" : "/api";
+        other = await fetchJSON(
+          `${otherBase}/club/${cid}/matches?${qs.toString()}`
+        );
+        if (getSource() === "sql") {
+          clubPerfMongo.matches = other.perf;
+          lastMongoMs.matches = other.ms;
+        } else {
+          clubPerfSQL.matches = other.perf;
+          lastSQLMs.matches = other.ms;
+        }
+      }
       ul.innerHTML = "";
       if (!data.rows || !data.rows.length) {
         ul.innerHTML =
@@ -226,7 +347,23 @@
         return;
       }
       data.rows.forEach((g) => ul.appendChild(opponentRow(Number(cid), g)));
-      meta.textContent = `Count ${data.rows.length} — ${data.ms} ms`;
+      if (compare && other) {
+        const aFaster = Number(data.ms) < Number(other.ms);
+        const bFaster = Number(other.ms) < Number(data.ms);
+        const aClass = aFaster ? "faster" : bFaster ? "slower" : "";
+        const bClass = bFaster ? "faster" : aFaster ? "slower" : "";
+        const diff =
+          data.rows.length !== other.rows.length
+            ? "<span class='meta-diff'>diff</span>"
+            : "";
+        meta.innerHTML = `<span class='meta-badges'><span class='meta-badge ${aClass}'>${getSource().toUpperCase()} ${
+          data.ms
+        } ms</span><span class='meta-sep'>|</span><span class='meta-badge ${bClass}'>${
+          getSource() === "sql" ? "Mongo" : "SQL"
+        } ${other.ms} ms</span>${diff}</span>`;
+      } else {
+        meta.textContent = `Count ${data.rows.length} — ${data.ms} ms`;
+      }
     } catch (e) {
       ul.innerHTML =
         '<li class="list-group-item text-danger">Failed to load matches</li>';
@@ -234,12 +371,30 @@
     }
   }
 
-  async function loadCompetitions(cid) {
+  async function loadCompetitions(cid, compare = false) {
     const sel = document.getElementById("comp-select");
     sel.innerHTML = `<option value="">Loading…</option>`;
     try {
       const base = getSource() === "mongo" ? "/api/mongo" : "/api";
       const data = await fetchJSON(`${base}/club/${cid}/competitions`);
+      if (getSource() === "sql") {
+        clubPerfSQL.competitions = data.perf;
+        lastSQLMs.competitions = data.ms;
+      } else {
+        clubPerfMongo.competitions = data.perf;
+        lastMongoMs.competitions = data.ms;
+      }
+      if (compare) {
+        const otherBase = getSource() === "sql" ? "/api/mongo" : "/api";
+        const other = await fetchJSON(`${otherBase}/club/${cid}/competitions`);
+        if (getSource() === "sql") {
+          clubPerfMongo.competitions = other.perf;
+          lastMongoMs.competitions = other.ms;
+        } else {
+          clubPerfSQL.competitions = other.perf;
+          lastSQLMs.competitions = other.ms;
+        }
+      }
       const rows = data.rows || [];
       sel.innerHTML = "";
       if (!rows.length) {
@@ -274,14 +429,42 @@
   function refreshAll() {
     const cid = qs("club_id");
     if (!cid) return;
-    loadClub(cid);
-    loadSquad(cid);
-    loadCompetitions(cid).then((defaultComp) => {
-      loadMatches(cid, defaultComp || undefined);
+    const compare = document.getElementById("club-compare").checked;
+    loadClub(cid, compare);
+    loadSquad(cid, compare);
+    loadCompetitions(cid, compare).then((defaultComp) => {
+      loadMatches(cid, defaultComp || undefined, compare);
       // Store default competition for ranking modal usage
       const vr = document.getElementById("view-ranking");
       if (vr) vr.dataset.defaultComp = defaultComp || "";
     });
+    updatePerfMeta(compare);
+  }
+  function updatePerfMeta(compare) {
+    const el = document.getElementById("club-perf-meta");
+    if (!el) return;
+    const source = getSource();
+    if (!compare) {
+      const msSum =
+        source === "sql"
+          ? Object.values(lastSQLMs).reduce((a, b) => a + b, 0)
+          : Object.values(lastMongoMs).reduce((a, b) => a + b, 0);
+      el.innerHTML = `<span class='meta-badges'><span class='meta-badge'>${source.toUpperCase()} total ${msSum.toFixed(
+        2
+      )} ms</span></span>`;
+      return;
+    }
+    const sqlTotal = Object.values(lastSQLMs).reduce((a, b) => a + b, 0);
+    const mongoTotal = Object.values(lastMongoMs).reduce((a, b) => a + b, 0);
+    const sqlFaster = sqlTotal < mongoTotal;
+    const mongoFaster = mongoTotal < sqlTotal;
+    const sqlClass = sqlFaster ? "faster" : mongoFaster ? "slower" : "";
+    const mongoClass = mongoFaster ? "faster" : sqlFaster ? "slower" : "";
+    el.innerHTML = `<span class='meta-badges'><span class='meta-badge ${sqlClass}'>SQL ${sqlTotal.toFixed(
+      2
+    )} ms</span><span class='meta-sep'>|</span><span class='meta-badge ${mongoClass}'>Mongo ${mongoTotal.toFixed(
+      2
+    )} ms</span></span>`;
   }
   (async function init() {
     const cid = qs("club_id");
@@ -292,12 +475,134 @@
     refreshAll();
     document.getElementById("comp-select").addEventListener("change", (e) => {
       const v = e.target.value || undefined;
-      loadMatches(cid, v);
+      loadMatches(cid, v, document.getElementById("club-compare").checked);
     });
     document.getElementById("club-source").addEventListener("change", () => {
       refreshAll();
     });
+    document
+      .getElementById("club-compare")
+      .addEventListener("change", () => refreshAll());
+    // perf modal button
+    document.getElementById("club-perf-more").onclick = async () => {
+      // Lazy fetch mongo explains if absent and compare enabled
+      const compare = document.getElementById("club-compare").checked;
+      const cid = qs("club_id");
+      if (compare) {
+        // Fetch perf=1 for mongo endpoints if explain missing
+        const needExplain = [
+          "profile",
+          "squad",
+          "matches",
+          "competitions",
+        ].some((k) => clubPerfMongo[k] && clubPerfMongo[k].explain == null);
+        if (needExplain) {
+          try {
+            await Promise.all([
+              fetchJSON(`/api/mongo/club/${cid}/profile?perf=1`).then((r) => {
+                clubPerfMongo.profile = r.perf;
+              }),
+              fetchJSON(`/api/mongo/club/${cid}/players?perf=1`).then((r) => {
+                clubPerfMongo.squad = r.perf;
+              }),
+              fetchJSON(`/api/mongo/club/${cid}/matches?limit=12&perf=1`).then(
+                (r) => {
+                  clubPerfMongo.matches = r.perf;
+                }
+              ),
+              fetchJSON(`/api/mongo/club/${cid}/competitions?perf=1`).then(
+                (r) => {
+                  clubPerfMongo.competitions = r.perf;
+                }
+              ),
+            ]);
+          } catch {}
+        }
+      }
+      openClubPerfModal();
+    };
+    // show perf button if SQL perf exists
+    document.getElementById("club-perf-more").style.display = "";
   })();
+
+  function openClubPerfModal() {
+    const id = "club-perf-modal";
+    let wrap = document.getElementById(id);
+    if (!wrap) {
+      wrap = document.createElement("div");
+      wrap.id = id;
+      wrap.className = "modal fade";
+      wrap.tabIndex = -1;
+      wrap.innerHTML = `<div class='modal-dialog modal-lg modal-dialog-scrollable'><div class='modal-content'><div class='modal-header'><h5 class='modal-title'>Club Query Performance</h5><button type='button' class='btn-close' data-bs-dismiss='modal'></button></div><div class='modal-body'><div id='club-perf-body'></div></div><div class='modal-footer'><button type='button' class='btn btn-secondary' data-bs-dismiss='modal'>Close</button></div></div></div>`;
+      document.body.appendChild(wrap);
+    }
+    const body = wrap.querySelector("#club-perf-body");
+    const renderSQL = () => {
+      const p = clubPerfSQL;
+      if (!p.profile && !p.squad && !p.matches) return "";
+      const section = (name, obj) =>
+        obj
+          ? `<div class='mb-3'><h6 class='fw-semibold mb-1'>${name}</h6><table class='table table-sm'><tbody><tr><th style='width:180px'>Exec ms</th><td>${
+              obj.execution_ms ?? "—"
+            }</td></tr><tr><th>Diag ms</th><td>${
+              obj.diagnostics_ms ?? "—"
+            }</td></tr><tr><th>Rows examined</th><td>${
+              obj.rows_examined ?? "—"
+            }</td></tr><tr><th>Rows sent</th><td>${
+              obj.rows_sent ?? "—"
+            }</td></tr><tr><th>Explain type</th><td>${
+              obj.explain_type ?? "—"
+            }</td></tr></tbody></table><pre class='small bg-light p-2 rounded border' style='white-space:pre-wrap'>${
+              obj.query || ""
+            }</pre><pre class='small bg-dark text-light p-2 rounded' style='max-height:200px;overflow:auto;white-space:pre-wrap'>${
+              obj.explain || "No explain"
+            }</pre></div>`
+          : "";
+      return `<div class='mb-4'><h5 class='fw-semibold'>SQL</h5>${section(
+        "Profile",
+        p.profile
+      )}${section("Squad", p.squad)}${section("Matches", p.matches)}${section(
+        "Competitions",
+        p.competitions
+      )}</div>`;
+    };
+    const renderMongo = () => {
+      const p = clubPerfMongo;
+      if (!p.profile && !p.squad && !p.matches) return "";
+      const section = (name, obj) =>
+        obj
+          ? `<div class='mb-3'><h6 class='fw-semibold mb-1'>${name}</h6><table class='table table-sm'><tbody>${
+              obj.stats
+                ? Object.keys(obj.stats)
+                    .map(
+                      (k) =>
+                        `<tr><th style='width:180px'>${k}</th><td>${obj.stats[k]}</td></tr>`
+                    )
+                    .join("")
+                : ""
+            }</tbody></table><pre class='small bg-light p-2 rounded border' style='white-space:pre-wrap'>${
+              typeof obj.query === "string"
+                ? obj.query
+                : JSON.stringify(obj.query, null, 2)
+            }</pre><pre class='small bg-dark text-light p-2 rounded' style='max-height:200px;overflow:auto;white-space:pre-wrap'>${
+              obj.explain
+                ? typeof obj.explain === "string"
+                  ? obj.explain
+                  : JSON.stringify(obj.explain, null, 2)
+                : "No explain"
+            }</pre></div>`
+          : "";
+      return `<div class='mb-4'><h5 class='fw-semibold'>Mongo</h5>${section(
+        "Profile",
+        p.profile
+      )}${section("Squad", p.squad)}${section("Matches", p.matches)}${section(
+        "Competitions",
+        p.competitions
+      )}</div>`;
+    };
+    body.innerHTML = renderSQL() + renderMongo();
+    bootstrap.Modal.getOrCreateInstance(wrap).show();
+  }
 </script>
 
 <!-- Clubs market ranking modal -->

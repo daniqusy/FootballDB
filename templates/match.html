@@ -1,4 +1,41 @@
 {% extends "base.html" %} {% block body %}
+<style>
+  .meta-badge {
+    display: inline-block;
+    padding: 0.2rem 0.6rem;
+    border-radius: 0.6rem;
+    border: 1px solid #e5e7eb;
+    background: #f9fafb;
+    color: #111827;
+    font-size: 0.85rem;
+    font-weight: 500;
+  }
+  .meta-badge.faster {
+    background: #ecfdf5;
+    border-color: #d1fae5;
+    color: #065f46;
+    font-weight: 600;
+  }
+  .meta-badge.slower {
+    background: #fef2f2;
+    border-color: #fee2e2;
+    color: #991b1b;
+    font-weight: 600;
+  }
+  .meta-sep {
+    color: #9ca3af;
+    padding: 0 0.35rem;
+  }
+  .meta-diff {
+    color: #b91c1c;
+    font-weight: 600;
+    margin-left: 0.35rem;
+  }
+  .meta-badges {
+    display: inline-flex;
+    align-items: center;
+  }
+</style>
 <div class="container my-3">
   <!-- Back -->
   <div class="mb-2">
@@ -29,19 +66,42 @@
         <div class="text-end ms-auto">
           <div id="date-comp" class="fw-semibold"></div>
           <div class="text-muted small" id="venue-ref"></div>
-          <div class="text-muted small" id="match-ms"></div>
-          <div class="mt-2 d-inline-flex align-items-center gap-1">
-            <label for="match-source" class="small text-muted mb-0"
-              >Source</label
+          <small id="match-meta" class="text-muted d-block mb-1"></small>
+          <div class="d-flex align-items-center gap-2 flex-wrap">
+            <div class="d-inline-flex align-items-center gap-1">
+              <label for="match-source" class="small text-muted mb-0"
+                >Source</label
+              >
+              <select
+                id="match-source"
+                class="form-select form-select-sm"
+                style="min-width: 110px"
+              >
+                <option value="sql" selected>SQL</option>
+                <option value="mongo">Mongo</option>
+              </select>
+            </div>
+            <div
+              class="form-check form-switch"
+              id="match-compare-wrap"
+              title="Compare SQL vs Mongo"
             >
-            <select
-              id="match-source"
-              class="form-select form-select-sm"
-              style="min-width: 110px"
+              <input
+                class="form-check-input"
+                type="checkbox"
+                id="match-compare"
+              />
+              <label class="form-check-label small" for="match-compare"
+                >Compare</label
+              >
+            </div>
+            <button
+              id="match-perf-more"
+              class="btn btn-link btn-sm p-0 text-decoration-none"
+              style="display: none"
             >
-              <option value="sql" selected>SQL</option>
-              <option value="mongo">Mongo</option>
-            </select>
+              More…
+            </button>
           </div>
         </div>
       </div>
@@ -286,43 +346,118 @@
   function getSource() {
     return document.getElementById("match-source").value;
   }
+  function diffObjects(a, b, keys) {
+    if (!a || !b) return true;
+    for (const k of keys) {
+      if (a[k] !== b[k]) return true;
+    }
+    return false;
+  }
+  function diffEvents(a, b) {
+    if (!Array.isArray(a) || !Array.isArray(b)) return true;
+    if (a.length !== b.length) return true;
+    for (let i = 0; i < a.length; i++) {
+      const ka = [
+        "minute",
+        "event_type",
+        "club_id",
+        "player_id",
+        "player_assist_id",
+        "player_in_id",
+      ];
+      for (const k of ka) {
+        if (a[i][k] !== b[i][k]) return true;
+      }
+    }
+    return false;
+  }
   async function loadMatch() {
     const gid = qs("game_id");
     if (!gid) {
       alert("Missing game_id");
       return;
     }
-    const base = getSource() === "mongo" ? "/api/mongo/match" : "/api/match";
+    const source = getSource();
+    const compare = document.getElementById("match-compare").checked;
+    const primaryUrl =
+      (source === "mongo" ? "/api/mongo/match" : "/api/match") +
+      `?game_id=${encodeURIComponent(gid)}`;
     try {
-      const data = await fetchJSON(
-        `${base}?game_id=${encodeURIComponent(gid)}`
-      );
-      if (!data || !data.game) {
+      const primary = await fetchJSON(primaryUrl);
+      let secondary = null;
+      let hasDiff = false;
+      if (compare) {
+        const otherSrc = source === "sql" ? "mongo" : "sql";
+        const secUrl =
+          (otherSrc === "mongo" ? "/api/mongo/match" : "/api/match") +
+          `?game_id=${encodeURIComponent(gid)}`;
+        secondary = await fetchJSON(secUrl);
+        if (primary.game && secondary.game) {
+          hasDiff = diffObjects(primary.game, secondary.game, [
+            "home_club_goals",
+            "away_club_goals",
+          ]);
+        }
+        if (!hasDiff) {
+          hasDiff = diffEvents(primary.events || [], secondary.events || []);
+        }
+      }
+      if (!primary || !primary.game) {
         document.getElementById(
           "match-header"
-        ).innerHTML = `<div class="card-body text-danger">Match not found.</div>`;
+        ).innerHTML = `<div class='card-body text-danger'>Match not found.</div>`;
         return;
       }
-      renderHeader(data.game);
-      renderEvents(data.events || []);
-      const msEl = document.getElementById("match-ms");
-      if (data.ms != null) {
-        let txt = `Query ${data.ms} ms`;
-        if (
-          data.ms_parts &&
-          data.ms_parts.game != null &&
-          data.ms_parts.events != null
-        ) {
-          txt += ` (game ${data.ms_parts.game} + events ${data.ms_parts.events} ms)`;
-        }
-        msEl.textContent = txt;
+      renderHeader(primary.game);
+      renderEvents(primary.events || []);
+      // Meta badges
+      const metaEl = document.getElementById("match-meta");
+      if (compare && secondary) {
+        const aMs = primary.ms;
+        const bMs = secondary.ms;
+        const aFaster = Number(aMs) < Number(bMs);
+        const bFaster = Number(bMs) < Number(aMs);
+        const aClass = aFaster ? "faster" : bFaster ? "slower" : "";
+        const bClass = bFaster ? "faster" : aFaster ? "slower" : "";
+        metaEl.innerHTML = `<span class='meta-badges'><span class='meta-badge ${aClass}'>${source.toUpperCase()} ${aMs} ms</span><span class='meta-sep'>|</span><span class='meta-badge ${bClass}'>${
+          source === "sql" ? "Mongo" : "SQL"
+        } ${bMs} ms</span>${
+          hasDiff ? "<span class='meta-diff'>diff</span>" : ""
+        }</span>`;
       } else {
-        msEl.textContent = "";
+        metaEl.innerHTML = `<span class='meta-badges'><span class='meta-badge'>${source.toUpperCase()} ${
+          primary.ms
+        } ms</span></span>`;
+      }
+      // Perf button
+      const perfBtn = document.getElementById("match-perf-more");
+      const sqlPerf =
+        source === "sql" ? primary.perf : compare ? secondary?.perf : null;
+      const mongoPerf =
+        source === "mongo" ? primary.perf : compare ? secondary?.perf : null;
+      const hasPerf = Boolean(sqlPerf || mongoPerf);
+      if (hasPerf) {
+        perfBtn.style.display = "";
+        perfBtn.onclick = async () => {
+          let enrichedMongoPerf = mongoPerf;
+          if (enrichedMongoPerf && enrichedMongoPerf.explain == null) {
+            try {
+              const resp = await fetch(
+                `/api/mongo/match?game_id=${encodeURIComponent(gid)}&perf=1`
+              );
+              const j = await resp.json();
+              if (j.perf) enrichedMongoPerf = j.perf;
+            } catch {}
+          }
+          openPerfModalMatch({ perf: sqlPerf }, { perf: enrichedMongoPerf });
+        };
+      } else {
+        perfBtn.style.display = "none";
       }
     } catch (e) {
       document.getElementById(
         "match-header"
-      ).innerHTML = `<div class="card-body text-danger">Failed to load match data: ${e.message}</div>`;
+      ).innerHTML = `<div class='card-body text-danger'>Failed to load match data: ${e.message}</div>`;
     }
   }
   (function init() {
@@ -330,6 +465,94 @@
     document
       .getElementById("match-source")
       .addEventListener("change", loadMatch);
+    document
+      .getElementById("match-compare")
+      .addEventListener("change", loadMatch);
   })();
+
+  // Performance modal renderer for match details
+  function openPerfModalMatch(sqlSection, mongoSection) {
+    const id = "match-perf-modal";
+    let wrap = document.getElementById(id);
+    if (!wrap) {
+      wrap = document.createElement("div");
+      wrap.id = id;
+      wrap.className = "modal fade";
+      wrap.tabIndex = -1;
+      wrap.innerHTML = `<div class='modal-dialog modal-lg modal-dialog-scrollable'><div class='modal-content'><div class='modal-header'><h5 class='modal-title'>Match Query Performance</h5><button type='button' class='btn-close' data-bs-dismiss='modal'></button></div><div class='modal-body'><div id='match-perf-body'></div></div><div class='modal-footer'><button type='button' class='btn btn-secondary' data-bs-dismiss='modal'>Close</button></div></div></div>`;
+      document.body.appendChild(wrap);
+    }
+    const body = wrap.querySelector("#match-perf-body");
+    const renderSQL = () => {
+      const p = sqlSection?.perf;
+      if (!p) return "";
+      const game = p.game || {};
+      const events = p.events || {};
+      return `<div class='mb-4'><h6 class='fw-semibold mb-2'>SQL</h6>
+        <table class='table table-sm'><tbody>
+          <tr><th style='width:180px'>Game exec ms</th><td>${
+            game.execution_ms ?? "—"
+          }</td></tr>
+          <tr><th>Events exec ms</th><td>${events.execution_ms ?? "—"}</td></tr>
+          <tr><th>Game diagnostics ms</th><td>${
+            game.diagnostics_ms ?? "—"
+          }</td></tr>
+          <tr><th>Events diagnostics ms</th><td>${
+            events.diagnostics_ms ?? "—"
+          }</td></tr>
+          <tr><th>Game rows examined</th><td>${
+            game.rows_examined ?? "—"
+          }</td></tr>
+          <tr><th>Events rows examined</th><td>${
+            events.rows_examined ?? "—"
+          }</td></tr>
+        </tbody></table>
+        <div class='mb-3'><div class='fw-semibold'>Game Query</div><pre class='small bg-light p-2 rounded border' style='white-space:pre-wrap'>${
+          game.query || ""
+        }</pre></div>
+        <div class='mb-3'><div class='fw-semibold'>Events Query</div><pre class='small bg-light p-2 rounded border' style='white-space:pre-wrap'>${
+          events.query || ""
+        }</pre></div>
+        <div class='mb-3'><div class='fw-semibold'>Game Explain (${
+          game.explain_type || "n/a"
+        })</div><pre class='small bg-dark text-light p-2 rounded' style='max-height:240px;overflow:auto;white-space:pre-wrap'>${
+        game.explain || "No explain"
+      }</pre></div>
+        <div class='mb-3'><div class='fw-semibold'>Events Explain (${
+          events.explain_type || "n/a"
+        })</div><pre class='small bg-dark text-light p-2 rounded' style='max-height:240px;overflow:auto;white-space:pre-wrap'>${
+        events.explain || "No explain"
+      }</pre></div>
+      </div>`;
+    };
+    const renderMongo = () => {
+      const mp = mongoSection?.perf || {};
+      const q = mp.query
+        ? typeof mp.query === "string"
+          ? mp.query
+          : JSON.stringify(mp.query, null, 2)
+        : "";
+      const statsRows = mp.stats
+        ? Object.keys(mp.stats)
+            .map(
+              (k) =>
+                `<tr><th style='width:180px'>${k}</th><td>${mp.stats[k]}</td></tr>`
+            )
+            .join("")
+        : "";
+      const explainText = mp.explain
+        ? typeof mp.explain === "string"
+          ? mp.explain
+          : JSON.stringify(mp.explain, null, 2)
+        : "No explain";
+      return `<div class='mb-4'><h6 class='fw-semibold mb-2'>Mongo</h6>
+        <table class='table table-sm'><tbody>${statsRows}</tbody></table>
+        <div class='mb-3'><div class='fw-semibold'>Query</div><pre class='small bg-light p-2 rounded border' style='white-space:pre-wrap'>${q}</pre></div>
+        <div class='mb-3'><div class='fw-semibold'>Explain / Command Output</div><pre class='small bg-dark text-light p-2 rounded' style='max-height:240px;overflow:auto;white-space:pre-wrap'>${explainText}</pre></div>
+      </div>`;
+    };
+    body.innerHTML = renderSQL() + renderMongo();
+    bootstrap.Modal.getOrCreateInstance(wrap).show();
+  }
 </script>
 {% endblock %}
