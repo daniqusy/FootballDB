@@ -94,6 +94,16 @@
     color: #374151;
   }
 
+  .source-badge {
+    display: inline-block;
+    padding: 0.15rem 0.4rem;
+    border-radius: 0.25rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+  }
+  .source-sql { background: #dcfce7; color: #166534; }
+  .source-mongo { background: #fed7aa; color: #92400e; }
+
   .subtle {
     color: var(--ink-500);
   }
@@ -142,9 +152,41 @@
 <div class="container py-4">
   <!-- Header -->
   <div class="event-table-header">
-    <div class="d-flex justify-content-between align-items-start mb-2">
-      <h1 class="h3 mb-0" style="font-weight: 800">Game Events</h1>
+    <h1 class="h3 mb-3" style="font-weight: 800">Game Events</h1>
+
+    <!-- Controls -->
+    <div class="controls">
       <div class="d-flex gap-2 align-items-center">
+        <input
+          type="text"
+          id="event-game-id"
+          class="form-control"
+          placeholder="Game ID"
+          style="min-width: 100px"
+        />
+        <select id="event-type" class="form-select">
+          <option value="">All Types</option>
+          <option value="Goals">Goals</option>
+          <option value="Cards">Cards</option>
+          <option value="Substitutions">Substitutions</option>
+        </select>
+        <button id="event-search-btn" class="btn btn-primary btn-sm">
+          Search
+        </button>
+      </div>
+
+      <div class="d-flex gap-2 align-items-center">
+        <span class="subtle small">Source</span>
+        <select
+          id="event-source"
+          class="form-select form-select-sm"
+        >
+          <option value="sql">SQL</option>
+          <option value="mongo">Mongo</option>
+        </select>
+      </div>
+
+      <div class="d-flex gap-2 align-items-center ms-auto">
         <span class="subtle small" id="event-meta"></span>
         <a href="/game-event/create" class="btn btn-success btn-sm"
           >+ Add Event</a
@@ -152,48 +194,6 @@
         <button id="event-refresh" class="btn btn-outline-secondary btn-sm">
           Refresh
         </button>
-      </div>
-    </div>
-
-    <!-- Controls -->
-    <div class="controls">
-      <div class="d-flex gap-2 align-items-center">
-        <input
-          type="number"
-          id="event-game-id"
-          class="form-control"
-          placeholder="Filter by Game ID"
-        />
-        <button id="event-search-btn" class="btn btn-primary btn-sm">
-          Search
-        </button>
-      </div>
-
-      <div class="d-flex gap-2 align-items-center">
-        <span class="filter-label subtle" style="margin: 0">Event Type</span>
-        <select
-          id="event-type"
-          class="form-select form-select-sm"
-          style="min-width: 130px"
-        >
-          <option value="">All Types</option>
-          <option value="Goals">Goals</option>
-          <option value="Cards">Cards</option>
-          <option value="Substitutions">Substitutions</option>
-          <option value="Shootout">Shootout</option>
-        </select>
-      </div>
-
-      <div class="d-flex gap-2 align-items-center">
-        <span class="subtle small" style="margin: 0">Source</span>
-        <select
-          id="event-source"
-          class="form-select form-select-sm"
-          style="min-width: 110px"
-        >
-          <option value="sql">SQL</option>
-          <option value="mongo">Mongo</option>
-        </select>
       </div>
     </div>
 
@@ -226,12 +226,13 @@
           <th>Player</th>
           <th>Assist/In</th>
           <th>Description</th>
+          <th class="text-center">Source</th>
           <th class="text-center">Action</th>
         </tr>
       </thead>
       <tbody id="event-table-body">
         <tr>
-          <td colspan="9" class="text-center py-4">
+          <td colspan="10" class="text-center py-4">
             <div class="loading-spinner"></div>
             <div class="mt-2">Loading events...</div>
           </td>
@@ -288,7 +289,7 @@
     const source = document.getElementById("event-source").value;
 
     const tbody = document.getElementById("event-table-body");
-    tbody.innerHTML = `<tr><td colspan="9" class="text-center py-4"><div class="loading-spinner"></div><div class="mt-2">Loading...</div></td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="10" class="text-center py-4"><div class="loading-spinner"></div><div class="mt-2">Loading...</div></td></tr>`;
 
     try {
       const baseRoot = source === "mongo" ? "/api/mongo" : "/api";
@@ -299,21 +300,21 @@
       const res = await J(url);
 
       currentPage = page;
-      renderTable(res);
+      renderTable(res, source);
       updatePagination(res, pageSize);
       updateMeta(res, source);
     } catch (err) {
-      tbody.innerHTML = `<tr><td colspan="9" class="text-center text-danger py-4">Error loading events</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="10" class="text-center text-danger py-4">Error loading events</td></tr>`;
       console.error(err);
     }
   }
 
-  function renderTable(res) {
+  function renderTable(res, source) {
     const tbody = document.getElementById("event-table-body");
     const rows = res.rows || [];
 
     if (rows.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="9" class="text-center py-4 text-muted">No events found</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="10" class="text-center py-4 text-muted">No events found</td></tr>`;
       return;
     }
 
@@ -343,6 +344,9 @@
         <td>${row.player_name || "—"}</td>
         <td class="subtle small">${assistInfo}</td>
         <td>${row.description || "—"}</td>
+        <td class="text-center">
+          <span class="source-badge source-${source.toLowerCase()}">${source.toUpperCase()}</span>
+        </td>
         <td class="text-center">
           <a href="/game-event/edit?event_id=${
             row.game_event_id

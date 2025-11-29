@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 import pymysql
 from pymongo import MongoClient
 from pymongo import ReturnDocument
+import uuid
 
 load_dotenv()
 app = Flask(__name__)
@@ -408,86 +409,137 @@ def match_page():
 def match_create_page():
     return render_template("create_match.html")
 
-# Create match (POST)
 @app.post("/api/match")
 def api_create_match():
     try:
-        data = request.get_json()
-        
-        # Validate required fields
-        if not data.get("date"):
-            return jsonify({"error": "Date is required"}), 400
-        if not data.get("home_club_id"):
-            return jsonify({"error": "Home club ID is required"}), 400
-        if not data.get("away_club_id"):
-            return jsonify({"error": "Away club ID is required"}), 400
-        if not data.get("competition_id"):
-            return jsonify({"error": "Competition ID is required"}), 400
-        if not data.get("season"):
-            return jsonify({"error": "Season is required"}), 400
-        
-        home_id = int(data.get("home_club_id"))
-        away_id = int(data.get("away_club_id"))
-        
-        # Validate clubs are different
-        if home_id == away_id:
-            return jsonify({"error": "Home and Away clubs must be different"}), 400
-        
-        # Validate scores are non-negative
-        home_goals = int(data.get("home_club_goals", 0)) if data.get("home_club_goals") else 0
-        away_goals = int(data.get("away_club_goals", 0)) if data.get("away_club_goals") else 0
-        
-        if home_goals < 0 or away_goals < 0:
-            return jsonify({"error": "Goals cannot be negative"}), 400
-        
-        # Get the next game_id (max + 1)
-        sql_max_id = "SELECT COALESCE(MAX(game_id), 0) + 1 AS next_id FROM game"
-        rows, _ = run_sql(sql_max_id)
+        data = request.get_json() or {}
+
+        # ---------------------------------------------------------
+        # VALIDATION: Home, Away, Competition, Season, Date
+        # ---------------------------------------------------------
+        required_fields = ["date", "competition_id", "season",
+                           "home_club_id", "away_club_id"]
+        for f in required_fields:
+            if not data.get(f):
+                return jsonify({"error": f"{f} is required"}), 400
+
+        # Parse helpers
+        def as_int(v):
+            return int(v) if (v not in [None, "", "null"]) else None
+
+        def as_float(v):
+            return float(v) if (v not in [None, "", "null"]) else None
+
+        # ---------------------------------------------------------
+        # SQL: Get next game_id
+        # ---------------------------------------------------------
+        sql_next = "SELECT COALESCE(MAX(game_id), 0) + 1 AS next_id FROM game"
+        rows, _ = run_sql(sql_next)
         game_id = rows[0]["next_id"] if rows else 1
-        
+
+        # ---------------------------------------------------------
+        # SQL INSERT
+        # ---------------------------------------------------------
         sql_insert = """
-            INSERT INTO game 
-            (game_id, date, match_time, competition_id, season, round,
-             home_club_id, away_club_id,
-             home_club_goals, away_club_goals,
-             home_club_position, away_club_position,
-             stadium, referee, attendance,
-             home_club_manager_name, away_club_manager_name,
-             home_club_formation, away_club_formation)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO game (
+                game_id, date, match_time, competition_id, season, round,
+                home_club_id, home_club_goals, home_club_formation,
+                home_club_position, home_club_manager_name,
+                away_club_id, away_club_goals, away_club_formation,
+                away_club_position, away_club_manager_name,
+                stadium, attendance, referee
+            )
+            VALUES (%s, %s, %s, %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s,
+                    %s, %s, %s,
+                    %s, %s,
+                    %s, %s, %s)
         """
-        
-        match_time = data.get("match_time") or None
-        home_pos = int(data.get("home_club_position")) if data.get("home_club_position") else None
-        away_pos = int(data.get("away_club_position")) if data.get("away_club_position") else None
-        attendance = int(data.get("attendance")) if data.get("attendance") else None
-        
+
         run_sql(sql_insert, (
             game_id,
             data.get("date"),
-            match_time,
+            data.get("match_time") or None,
             data.get("competition_id"),
             data.get("season"),
             data.get("round") or None,
-            home_id,
-            away_id,
-            home_goals,
-            away_goals,
-            home_pos,
-            away_pos,
-            data.get("stadium") or None,
-            data.get("referee") or None,
-            attendance,
-            data.get("home_club_manager_name") or None,
-            data.get("away_club_manager_name") or None,
+            data.get("home_club_id"),
+            as_int(data.get("home_club_goals")),
             data.get("home_club_formation") or None,
-            data.get("away_club_formation") or None
+            as_int(data.get("home_club_position")),
+            data.get("home_club_manager_name") or None,
+            data.get("away_club_id"),
+            as_int(data.get("away_club_goals")),
+            data.get("away_club_formation") or None,
+            as_int(data.get("away_club_position")),
+            data.get("away_club_manager_name") or None,
+            data.get("stadium") or None,
+            as_int(data.get("attendance")),
+            data.get("referee") or None
         ))
-        
-        return jsonify({"game_id": game_id, "success": True}), 201
-        
+
+        # ---------------------------------------------------------
+        # FETCH HOME & AWAY CLUB NAMES (SQL → MONGO)
+        # ---------------------------------------------------------
+        sql_clubs = """
+            SELECT club_id, name
+            FROM club
+            WHERE club_id IN (%s, %s)
+        """
+
+        clubs, _ = run_sql(sql_clubs, (data.get("home_club_id"),
+                                       data.get("away_club_id")))
+
+        # Map: club_id → name
+        name_map = {c["club_id"]: c["name"] for c in clubs}
+
+        home_name = name_map.get(int(data.get("home_club_id")), None)
+        away_name = name_map.get(int(data.get("away_club_id")), None)
+
+        # ---------------------------------------------------------
+        # MONGO INSERT (matches ETL schema)
+        # ---------------------------------------------------------
+        def mongo_insert(db):
+            doc = {
+                "_id": game_id,
+                "game_id": game_id,
+                "date": data.get("date"),
+                "competition_id": data.get("competition_id"),
+                "season": data.get("season"),
+                "round": data.get("round") or None,
+                "home": {
+                    "club_id": as_int(data.get("home_club_id")),
+                    "name": home_name,
+                    "goals": as_int(data.get("home_club_goals")),
+                    "formation": (data.get("home_club_formation") or "").replace("/", "-").strip(),
+                    "position": as_int(data.get("home_club_position")),
+                    "manager_name": data.get("home_club_manager_name") or None
+                },
+                "away": {
+                    "club_id": as_int(data.get("away_club_id")),
+                    "name": away_name,
+                    "goals": as_int(data.get("away_club_goals")),
+                    "formation": (data.get("away_club_formation") or "").replace("/", "-").strip(),
+                    "position": as_int(data.get("away_club_position")),
+                    "manager_name": data.get("away_club_manager_name") or None
+                },
+                "stadium": data.get("stadium") or None,
+                "attendance": as_int(data.get("attendance")),
+                "referee": data.get("referee") or None,
+                "match_time": data.get("match_time") or None,
+                "events": [],        # Matches ETL structure
+                "updated_at": int(time.time())
+            }
+            return db.games.insert_one(doc)
+
+        run_mongo(mongo_insert)
+
+        return jsonify({"success": True, "game_id": game_id}), 201
+
     except Exception as err:
         return jsonify({"error": str(err), "details": repr(err)}), 500
+
 
 # Edit match page
 @app.route("/match/edit")
@@ -513,79 +565,134 @@ def api_match_edit(game_id):
     rows, ms, perf = run_sql_ex(sql, (game_id,))
     return jsonify(dict(ms=ms, row=rows[0] if rows else None, perf=perf))
 
-# Update match (POST)
 @app.post("/api/match/<int:game_id>/update")
 def api_update_match(game_id):
     try:
-        data = request.get_json()
-        
-        # Validate required fields
-        if not data.get("date"):
-            return jsonify({"error": "Date is required"}), 400
-        if not data.get("home_club_id"):
-            return jsonify({"error": "Home club ID is required"}), 400
-        if not data.get("away_club_id"):
-            return jsonify({"error": "Away club ID is required"}), 400
-        
-        home_id = int(data.get("home_club_id"))
-        away_id = int(data.get("away_club_id"))
-        
-        # Validate clubs are different
-        if home_id == away_id:
-            return jsonify({"error": "Home and Away clubs must be different"}), 400
-        
-        # Validate scores are non-negative
-        home_goals = int(data.get("home_club_goals", 0)) if data.get("home_club_goals") else None
-        away_goals = int(data.get("away_club_goals", 0)) if data.get("away_club_goals") else None
-        
-        if home_goals is not None and home_goals < 0:
-            return jsonify({"error": "Goals cannot be negative"}), 400
-        if away_goals is not None and away_goals < 0:
-            return jsonify({"error": "Goals cannot be negative"}), 400
-        
-        match_time = data.get("match_time") or None
-        home_pos = int(data.get("home_club_position")) if data.get("home_club_position") else None
-        away_pos = int(data.get("away_club_position")) if data.get("away_club_position") else None
-        attendance = int(data.get("attendance")) if data.get("attendance") else None
-        
+        data = request.get_json() or {}
+
+        # Required fields just like create
+        required_fields = ["date", "competition_id", "season",
+                           "home_club_id", "away_club_id"]
+        for f in required_fields:
+            if not data.get(f):
+                return jsonify({"error": f"{f} is required"}), 400
+
+        # Helpers
+        def as_int(v):
+            return int(v) if (v not in [None, "", "null"]) else None
+
+        def as_float(v):
+            return float(v) if (v not in [None, "", "null"]) else None
+
+        # ---------------------------------------------------------
+        # SQL UPDATE
+        # ---------------------------------------------------------
         sql_update = """
-            UPDATE game 
-            SET date=%s, match_time=%s, competition_id=%s, season=%s, round=%s,
-                home_club_id=%s, away_club_id=%s,
-                home_club_goals=%s, away_club_goals=%s,
-                home_club_position=%s, away_club_position=%s,
-                stadium=%s, referee=%s, attendance=%s,
-                home_club_manager_name=%s, away_club_manager_name=%s,
-                home_club_formation=%s, away_club_formation=%s
+            UPDATE game
+            SET date=%s,
+                match_time=%s,
+                competition_id=%s,
+                season=%s,
+                round=%s,
+                home_club_id=%s,
+                home_club_goals=%s,
+                home_club_formation=%s,
+                home_club_position=%s,
+                home_club_manager_name=%s,
+                away_club_id=%s,
+                away_club_goals=%s,
+                away_club_formation=%s,
+                away_club_position=%s,
+                away_club_manager_name=%s,
+                stadium=%s,
+                attendance=%s,
+                referee=%s
             WHERE game_id=%s
         """
 
         run_sql(sql_update, (
             data.get("date"),
-            match_time,
+            data.get("match_time") or None,
             data.get("competition_id"),
             data.get("season"),
             data.get("round") or None,
-            home_id,
-            away_id,
-            home_goals,
-            away_goals,
-            home_pos,
-            away_pos,
-            data.get("stadium") or None,
-            data.get("referee") or None,
-            attendance,
-            data.get("home_club_manager_name") or None,
-            data.get("away_club_manager_name") or None,
+            data.get("home_club_id"),
+            as_int(data.get("home_club_goals")),
             data.get("home_club_formation") or None,
+            as_int(data.get("home_club_position")),
+            data.get("home_club_manager_name") or None,
+            data.get("away_club_id"),
+            as_int(data.get("away_club_goals")),
             data.get("away_club_formation") or None,
+            as_int(data.get("away_club_position")),
+            data.get("away_club_manager_name") or None,
+            data.get("stadium") or None,
+            as_int(data.get("attendance")),
+            data.get("referee") or None,
             game_id
         ))
-        
-        return jsonify({"game_id": game_id, "success": True}), 200
-        
+
+        # ---------------------------------------------------------
+        # FETCH HOME & AWAY CLUB NAMES (from SQL → Mongo)
+        # ---------------------------------------------------------
+        sql_clubs = """
+            SELECT club_id, name
+            FROM club
+            WHERE club_id IN (%s, %s)
+        """
+        clubs, _ = run_sql(sql_clubs, (
+            data.get("home_club_id"),
+            data.get("away_club_id")
+        ))
+        name_map = {c["club_id"]: c["name"] for c in clubs}
+
+        home_name = name_map.get(int(data.get("home_club_id")), None)
+        away_name = name_map.get(int(data.get("away_club_id")), None)
+
+        # ---------------------------------------------------------
+        # MONGO UPDATE (matches ETL schema exactly)
+        # ---------------------------------------------------------
+        def mongo_update(db):
+            return db.games.update_one(
+                {"_id": game_id},
+                {
+                    "$set": {
+                        "date": data.get("date"),
+                        "competition_id": data.get("competition_id"),
+                        "season": data.get("season"),
+                        "round": data.get("round") or None,
+                        "home": {
+                            "club_id": as_int(data.get("home_club_id")),
+                            "name": home_name,
+                            "goals": as_int(data.get("home_club_goals")),
+                            "formation": (data.get("home_club_formation") or "").replace("/", "-").strip(),
+                            "position": as_int(data.get("home_club_position")),
+                            "manager_name": data.get("home_club_manager_name") or None
+                        },
+                        "away": {
+                            "club_id": as_int(data.get("away_club_id")),
+                            "name": away_name,
+                            "goals": as_int(data.get("away_club_goals")),
+                            "formation": (data.get("away_club_formation") or "").replace("/", "-").strip(),
+                            "position": as_int(data.get("away_club_position")),
+                            "manager_name": data.get("away_club_manager_name") or None
+                        },
+                        "stadium": data.get("stadium") or None,
+                        "attendance": as_int(data.get("attendance")),
+                        "referee": data.get("referee") or None,
+                        "match_time": data.get("match_time") or None,
+                        "updated_at": int(time.time())
+                    }
+                }
+            )
+
+        run_mongo(mongo_update)
+
+        return jsonify({"success": True, "game_id": game_id}), 200
+
     except Exception as err:
         return jsonify({"error": str(err), "details": repr(err)}), 500
+
 
 # Match details
 @app.get("/api/match")
@@ -2344,6 +2451,9 @@ def api_delete_player(pid):
         # Delete from player
         sql_player = "DELETE FROM player WHERE player_id=%s"
         run_sql(sql_player, (pid,))
+
+        # Delete from MongoDB
+        run_mongo(lambda db: db.players.delete_one({"_id": pid}))
         
         # Delete the image file if it exists
         if image_rows and image_rows[0].get('image_url'):
@@ -2449,38 +2559,33 @@ def api_create_club():
     try:
         data = request.get_json()
         
-        # Validate required field
         if not data.get("name"):
             return jsonify({"error": "Club name is required"}), 400
         
-        # Get the next club_id (max + 1)
+        # Get next SQL club_id
         sql_max_id = "SELECT COALESCE(MAX(club_id), 0) + 1 AS next_id FROM club"
         rows, _ = run_sql(sql_max_id)
         club_id = rows[0]["next_id"] if rows else 1
         
-        # Insert into club table
+        # Prepare fields
+        domestic_competition_id = data.get("domestic_competition_id") or None
+        
+        squad_size = data.get("squad_size")
+        squad_size = int(squad_size) if squad_size else None
+        
+        average_age = data.get("average_age")
+        average_age = float(average_age) if average_age else None
+        
+        stadium_seats = data.get("stadium_seats")
+        stadium_seats = int(stadium_seats) if stadium_seats else None
+        
+        # Insert into SQL
         sql_club = """
             INSERT INTO club 
             (club_id, name, domestic_competition_id, squad_size, average_age, 
              stadium_name, stadium_seats)
             VALUES (%s, %s, %s, %s, %s, %s, %s)
         """
-        
-        domestic_competition_id = data.get("domestic_competition_id")
-        if domestic_competition_id == "": domestic_competition_id = None
-        else: domestic_competition_id = int(domestic_competition_id) if domestic_competition_id else None
-        
-        squad_size = data.get("squad_size")
-        if squad_size == "": squad_size = None
-        else: squad_size = int(squad_size) if squad_size else None
-        
-        average_age = data.get("average_age")
-        if average_age == "": average_age = None
-        else: average_age = float(average_age) if average_age else None
-        
-        stadium_seats = data.get("stadium_seats")
-        if stadium_seats == "": stadium_seats = None
-        else: stadium_seats = int(stadium_seats) if stadium_seats else None
         
         run_sql(sql_club, (
             club_id,
@@ -2491,11 +2596,30 @@ def api_create_club():
             data.get("stadium_name") or None,
             stadium_seats
         ))
+
+        # ---------------------------------------
+        #  INSERT INTO MONGODB (SYNC)
+        # ---------------------------------------
+        def mongo_insert(db):
+            return db.clubs.insert_one({
+                "club_id": club_id,
+                "name": data.get("name"),
+                "domestic_competition_id": domestic_competition_id,
+                "squad_size": squad_size,
+                "average_age": average_age,
+                "stadium_name": data.get("stadium_name") or None,
+                "stadium_seats": stadium_seats,
+                "player_count": 0,
+                "total_market_value_eur": 0
+            })
+        
+        run_mongo(mongo_insert)
         
         return jsonify({"club_id": club_id, "success": True}), 201
         
     except Exception as err:
         return jsonify({"error": str(err), "details": repr(err)}), 500
+
 
 # Edit club page
 @app.route("/club/edit")
@@ -2514,52 +2638,75 @@ def api_club_edit(club_id):
     rows, ms = run_sql(sql, (club_id,))
     return jsonify(dict(ms=ms, row=rows[0] if rows else None))
 
-# Update club (POST)
-@app.post("/api/club/<int:club_id>/update")
-def api_update_club(club_id):
+@app.post("/api/club/<int:cid>/update")
+def api_update_club(cid):
     try:
-        data = request.get_json()
-        
+        data = request.get_json() or {}
+
         if not data.get("name"):
             return jsonify({"error": "Club name is required"}), 400
-        
-        sql_club = """
-            UPDATE club 
-            SET name=%s, domestic_competition_id=%s, squad_size=%s, average_age=%s,
-                stadium_name=%s, stadium_seats=%s
+
+        # Parse fields safely
+        def as_int(v):
+            return int(v) if (v not in [None, ""]) else None
+
+        def as_float(v):
+            return float(v) if (v not in [None, ""]) else None
+
+        # SQL update with ALL columns
+        sql = """
+            UPDATE club
+            SET name=%s,
+                domestic_competition_id=%s,
+                squad_size=%s,
+                average_age=%s,
+                foreigners_number=%s,
+                foreigners_percentage=%s,
+                national_team_players=%s,
+                stadium_name=%s,
+                stadium_seats=%s,
+                net_transfer_record=%s,
+                last_season=%s
             WHERE club_id=%s
         """
-        
-        domestic_competition_id = data.get("domestic_competition_id")
-        if domestic_competition_id == "": domestic_competition_id = None
-        else: domestic_competition_id = int(domestic_competition_id) if domestic_competition_id else None
-        
-        squad_size = data.get("squad_size")
-        if squad_size == "": squad_size = None
-        else: squad_size = int(squad_size) if squad_size else None
-        
-        average_age = data.get("average_age")
-        if average_age == "": average_age = None
-        else: average_age = float(average_age) if average_age else None
-        
-        stadium_seats = data.get("stadium_seats")
-        if stadium_seats == "": stadium_seats = None
-        else: stadium_seats = int(stadium_seats) if stadium_seats else None
-        
-        run_sql(sql_club, (
+
+        run_sql(sql, (
             data.get("name"),
-            domestic_competition_id,
-            squad_size,
-            average_age,
+            data.get("domestic_competition_id") or None,
+            as_int(data.get("squad_size")),
+            as_float(data.get("average_age")),
+            as_int(data.get("foreigners_number")),
+            as_float(data.get("foreigners_percentage")),
+            as_int(data.get("national_team_players")),
             data.get("stadium_name") or None,
-            stadium_seats,
-            club_id
+            as_int(data.get("stadium_seats")),
+            data.get("net_transfer_record") or None,
+            as_int(data.get("last_season")),
+            cid
         ))
-        
-        return jsonify({"club_id": club_id, "success": True}), 200
-        
+
+        # Mongo update uses only fields that actually exist in Mongo
+        def update_mongo(db):
+            return db.clubs.update_one(
+                {"club_id": cid},
+                {"$set": {
+                    "name": data.get("name"),
+                    "domestic_competition_id": data.get("domestic_competition_id") or None,
+                    "squad_size": as_int(data.get("squad_size")),
+                    "average_age": as_float(data.get("average_age")),
+                    "stadium_name": data.get("stadium_name") or None,
+                    "stadium_seats": as_int(data.get("stadium_seats")),
+                    "updated_at": int(time.time())
+                }}
+            )
+
+        run_mongo(update_mongo)
+
+        return jsonify({"success": True}), 200
+
     except Exception as err:
         return jsonify({"error": str(err), "details": repr(err)}), 500
+
 
 # Upload club logo
 @app.post("/api/upload/club-logo")
@@ -2633,18 +2780,26 @@ def api_upload_player_image():
     except Exception as err:
         return jsonify({"error": str(err), "details": repr(err)}), 500
 
-# Delete club
-@app.delete("/api/club/<int:club_id>")
-def api_delete_club(club_id):
+@app.delete("/api/club/<int:cid>")
+def api_delete_club(cid):
     try:
-        # Delete from club
-        sql_delete = "DELETE FROM club WHERE club_id=%s"
-        run_sql(sql_delete, (club_id,))
-        
-        return jsonify({"success": True, "message": f"Club {club_id} deleted"}), 200
-    
+        # 1. Delete from SQL
+        run_sql("DELETE FROM club WHERE club_id=%s", (cid,))
+
+        # 2. Delete from Mongo
+        def mongo_delete(db):
+            return db.clubs.delete_one({"club_id": cid})
+
+        run_mongo(mongo_delete)
+
+        return jsonify({
+            "success": True,
+            "club_id": cid
+        }), 200
+
     except Exception as err:
         return jsonify({"error": str(err), "details": repr(err)}), 500
+
 
 @app.route("/games")
 def games_page():
@@ -2772,18 +2927,23 @@ def api_mongo_games_list():
     (rows, total), ms = run_mongo(_q)
     return jsonify(dict(ms=ms, rows=rows, page=page, page_size=page_size, total=total, source="mongo"))
 
-# Delete match
 @app.delete("/api/match/<int:game_id>")
 def api_delete_match(game_id):
     try:
-        # Delete from match
-        sql_delete = "DELETE FROM game WHERE game_id=%s"
-        run_sql(sql_delete, (game_id,))
-        
-        return jsonify({"success": True, "message": f"Match {game_id} deleted"}), 200
-    
+        # Delete from SQL
+        run_sql("DELETE FROM game WHERE game_id=%s", (game_id,))
+
+        # Delete from Mongo
+        def mongo_delete(db):
+            return db.games.delete_one({"_id": game_id})
+
+        run_mongo(mongo_delete)
+
+        return jsonify({"success": True, "game_id": game_id}), 200
+
     except Exception as err:
         return jsonify({"error": str(err), "details": repr(err)}), 500
+
 
 # Games seasons
 @app.get("/api/games/seasons")
@@ -3010,106 +3170,212 @@ def api_appearance_get(appearance_id):
     rows, ms = run_sql(sql, (appearance_id,))
     return jsonify(dict(ms=ms, row=rows[0] if rows else None))
 
-# Create appearance
+
 @app.post("/api/appearance")
-def api_appearance_create():
+def api_create_appearance():
     try:
-        data = request.get_json()
-        
-        # Validate required fields
-        if not data.get("game_id"):
-            return jsonify({"error": "Game ID is required"}), 400
-        if not data.get("player_id"):
-            return jsonify({"error": "Player ID is required"}), 400
-        if not data.get("date"):
-            return jsonify({"error": "Date is required"}), 400
-        if not data.get("player_club_id"):
-            return jsonify({"error": "Player Club ID is required"}), 400
-        
-        # Generate appearance_id as a composite of game_id and player_id
-        game_id = int(data.get("game_id"))
-        player_id = int(data.get("player_id"))
-        appearance_id = f"{game_id}_{player_id}"
-        
-        sql_insert = """
-            INSERT INTO appearance 
-            (appearance_id, game_id, player_id, player_club_id, player_current_club_id, 
-             date, yellow_cards, red_cards, goals, assists, minutes_played)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        data = request.get_json() or {}
+
+        # Validate required
+        required = ["game_id", "player_id", "date", "player_club_id"]
+        for f in required:
+            if not data.get(f):
+                return jsonify({"error": f"{f} is required"}), 400
+
+        def as_int(v):
+            return int(v) if (v not in [None, "", "null"]) else None
+
+        # Generate appearance_id
+        appearance_id = str(uuid.uuid4())[:20]
+
+        # --------------------------------------------------------
+        # FETCH PLAYER NAME FROM SQL
+        # --------------------------------------------------------
+        sql_player = "SELECT name FROM player WHERE player_id=%s"
+        player_rows, _ = run_sql(sql_player, (data["player_id"],))
+        player_name = player_rows[0]["name"] if player_rows else None
+
+        # --------------------------------------------------------
+        # FETCH CLUB NAME FROM SQL
+        # --------------------------------------------------------
+        sql_club = "SELECT name FROM club WHERE club_id=%s"
+        club_rows, _ = run_sql(sql_club, (data["player_club_id"],))
+        club_name = club_rows[0]["name"] if club_rows else None
+
+        # --------------------------------------------------------
+        # INSERT INTO SQL
+        # --------------------------------------------------------
+        sql = """
+            INSERT INTO appearance (
+                appearance_id, game_id, player_id,
+                player_club_id, player_current_club_id, date,
+                yellow_cards, red_cards, goals, assists, minutes_played
+            )
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         """
-        
-        run_sql(sql_insert, (
+
+        run_sql(sql, (
             appearance_id,
-            game_id,
-            player_id,
-            int(data.get("player_club_id")),
-            int(data.get("player_current_club_id")) if data.get("player_current_club_id") else None,
+            as_int(data.get("game_id")),
+            as_int(data.get("player_id")),
+            as_int(data.get("player_club_id")),
+            as_int(data.get("player_current_club_id")),
             data.get("date"),
-            int(data.get("yellow_cards", 0)),
-            int(data.get("red_cards", 0)),
-            int(data.get("goals", 0)),
-            int(data.get("assists", 0)),
-            int(data.get("minutes_played")) if data.get("minutes_played") else None
+            as_int(data.get("yellow_cards")),
+            as_int(data.get("red_cards")),
+            as_int(data.get("goals")),
+            as_int(data.get("assists")),
+            as_int(data.get("minutes_played"))
         ))
-        
-        return jsonify({"appearance_id": appearance_id, "success": True}), 201
-        
+
+        # --------------------------------------------------------
+        # INSERT INTO MONGO (CORRECT FORMAT)
+        # --------------------------------------------------------
+        def mongo_insert(db):
+            return db.appearances.insert_one({
+                "_id": appearance_id,
+                "appearance_id": appearance_id,
+                "game_id": as_int(data.get("game_id")),
+                "player_id": as_int(data.get("player_id")),
+                "player_club_id": as_int(data.get("player_club_id")),
+                "player_current_club_id": as_int(data.get("player_current_club_id")),
+                "date": data.get("date"),
+                "minutes_played": as_int(data.get("minutes_played")),
+                "goals": as_int(data.get("goals")),
+                "assists": as_int(data.get("assists")),
+                "yellow_cards": as_int(data.get("yellow_cards")),
+                "red_cards": as_int(data.get("red_cards")),
+                # EXTRA FIELDS REQUIRED IN MONGO
+                "player_name": player_name,
+                "club_name": club_name,
+                "updated_at": int(time.time())
+            })
+
+        run_mongo(mongo_insert)
+
+        return jsonify({"success": True, "appearance_id": appearance_id}), 201
+
     except Exception as err:
         return jsonify({"error": str(err), "details": repr(err)}), 500
 
-# Update appearance
 @app.post("/api/appearance/<appearance_id>/update")
-def api_appearance_update(appearance_id):
+def api_update_appearance(appearance_id):
     try:
-        data = request.get_json()
-        
-        # Validate required fields
-        if not data.get("game_id"):
-            return jsonify({"error": "Game ID is required"}), 400
-        if not data.get("player_id"):
-            return jsonify({"error": "Player ID is required"}), 400
-        if not data.get("date"):
-            return jsonify({"error": "Date is required"}), 400
-        if not data.get("player_club_id"):
-            return jsonify({"error": "Player Club ID is required"}), 400
-        
-        sql_update = """
-            UPDATE appearance 
-            SET game_id=%s, player_id=%s, player_club_id=%s, player_current_club_id=%s,
-                date=%s, yellow_cards=%s, red_cards=%s, goals=%s, assists=%s, minutes_played=%s
+        data = request.get_json() or {}
+
+        # --------------------------------------------------------
+        # VALIDATION
+        # --------------------------------------------------------
+        required = ["game_id", "player_id", "date", "player_club_id"]
+        for f in required:
+            if not data.get(f):
+                return jsonify({"error": f"{f} is required"}), 400
+
+        def as_int(v):
+            return int(v) if (v not in [None, "", "null"]) else None
+
+        # --------------------------------------------------------
+        # FETCH PLAYER NAME FROM SQL
+        # --------------------------------------------------------
+        sql_player = "SELECT name FROM player WHERE player_id=%s"
+        player_rows, _ = run_sql(sql_player, (data["player_id"],))
+        player_name = player_rows[0]["name"] if player_rows else None
+
+        # --------------------------------------------------------
+        # FETCH CLUB NAME FROM SQL
+        # --------------------------------------------------------
+        sql_club = "SELECT name FROM club WHERE club_id=%s"
+        club_rows, _ = run_sql(sql_club, (data["player_club_id"],))
+        club_name = club_rows[0]["name"] if club_rows else None
+
+        # --------------------------------------------------------
+        # SQL UPDATE
+        # --------------------------------------------------------
+        sql = """
+            UPDATE appearance
+            SET game_id=%s,
+                player_id=%s,
+                player_club_id=%s,
+                player_current_club_id=%s,
+                date=%s,
+                yellow_cards=%s,
+                red_cards=%s,
+                goals=%s,
+                assists=%s,
+                minutes_played=%s
             WHERE appearance_id=%s
         """
-        
-        run_sql(sql_update, (
-            int(data.get("game_id")),
-            int(data.get("player_id")),
-            int(data.get("player_club_id")),
-            int(data.get("player_current_club_id")) if data.get("player_current_club_id") else None,
+
+        run_sql(sql, (
+            as_int(data.get("game_id")),
+            as_int(data.get("player_id")),
+            as_int(data.get("player_club_id")),
+            as_int(data.get("player_current_club_id")),
             data.get("date"),
-            int(data.get("yellow_cards", 0)),
-            int(data.get("red_cards", 0)),
-            int(data.get("goals", 0)),
-            int(data.get("assists", 0)),
-            int(data.get("minutes_played")) if data.get("minutes_played") else None,
+            as_int(data.get("yellow_cards")),
+            as_int(data.get("red_cards")),
+            as_int(data.get("goals")),
+            as_int(data.get("assists")),
+            as_int(data.get("minutes_played")),
             appearance_id
         ))
-        
-        return jsonify({"appearance_id": appearance_id, "success": True}), 200
-        
+
+        # --------------------------------------------------------
+        # MONGO UPDATE (CORRECT ETL FORMAT)
+        # --------------------------------------------------------
+        def mongo_update(db):
+            return db.appearances.update_one(
+                {"appearance_id": appearance_id},
+                {
+                    "$set": {
+                        "game_id": as_int(data.get("game_id")),
+                        "player_id": as_int(data.get("player_id")),
+                        "player_club_id": as_int(data.get("player_club_id")),
+                        "player_current_club_id": as_int(data.get("player_current_club_id")),
+                        "date": data.get("date"),
+                        "minutes_played": as_int(data.get("minutes_played")),
+                        "goals": as_int(data.get("goals")),
+                        "assists": as_int(data.get("assists")),
+                        "yellow_cards": as_int(data.get("yellow_cards")),
+                        "red_cards": as_int(data.get("red_cards")),
+                        "player_name": player_name,
+                        "club_name": club_name,
+                        "updated_at": int(time.time())
+                    }
+                }
+            )
+
+        run_mongo(mongo_update)
+
+        return jsonify({"success": True, "appearance_id": appearance_id}), 200
+
     except Exception as err:
         return jsonify({"error": str(err), "details": repr(err)}), 500
 
-# Delete appearance
 @app.delete("/api/appearance/<appearance_id>")
-def api_appearance_delete(appearance_id):
+def api_delete_appearance(appearance_id):
     try:
-        sql_delete = "DELETE FROM appearance WHERE appearance_id=%s"
-        run_sql(sql_delete, (appearance_id,))
-        
-        return jsonify({"success": True, "message": f"Appearance {appearance_id} deleted"}), 200
-    
+        # --------------------------------------------------------
+        # DELETE FROM SQL
+        # --------------------------------------------------------
+        run_sql("DELETE FROM appearance WHERE appearance_id=%s", (appearance_id,))
+
+        # --------------------------------------------------------
+        # DELETE FROM MONGO
+        # --------------------------------------------------------
+        def mongo_delete(db):
+            return db.appearances.delete_one({"appearance_id": appearance_id})
+
+        run_mongo(mongo_delete)
+
+        return jsonify({
+            "success": True,
+            "appearance_id": appearance_id
+        }), 200
+
     except Exception as err:
         return jsonify({"error": str(err), "details": repr(err)}), 500
+
 
 # Transfers page
 @app.route("/transfers")
@@ -3215,127 +3481,252 @@ def api_transfer_get(transfer_id):
     rows, ms = run_sql(sql, (transfer_id,))
     return jsonify(dict(ms=ms, row=rows[0] if rows else None))
 
-# Create transfer
 @app.post("/api/transfer")
-def api_transfer_create():
+def api_create_transfer():
     try:
-        data = request.get_json()
-        
-        # Validate required fields
-        if not data.get("player_id"):
-            return jsonify({"error": "Player ID is required"}), 400
-        if not data.get("transfer_date"):
-            return jsonify({"error": "Transfer date is required"}), 400
-        if not data.get("to_club_id"):
-            return jsonify({"error": "To club ID is required"}), 400
-        
-        player_id = int(data.get("player_id"))
-        transfer_date = data.get("transfer_date")
-        
-        # Check for existing transfer for this player (within last 30 days or future)
-        sql_check = """
-          SELECT t.transfer_id, t.transfer_date, p.name AS player_name, tc.name AS to_club_name
-          FROM transfer t
-          JOIN player p ON p.player_id = t.player_id
-          JOIN club tc ON tc.club_id = t.to_club_id
-          WHERE t.player_id = %s AND t.transfer_date >= DATE_SUB(%s, INTERVAL 30 DAY)
-          ORDER BY t.transfer_date DESC
-          LIMIT 1
-        """
-        
-        existing_transfers, _ = run_sql(sql_check, (player_id, transfer_date))
-        
-        if existing_transfers:
-            existing = existing_transfers[0]
-            return jsonify({
-                "error": f"Player '{existing['player_name']}' already has a pending transfer to '{existing['to_club_name']}' on {existing['transfer_date']}. Cannot create multiple transfers for the same player within 30 days."
-            }), 400
-        
-        # Get the next transfer_id (max + 1)
-        sql_max_id = "SELECT COALESCE(MAX(transfer_id), 0) + 1 AS next_id FROM transfer"
-        rows, _ = run_sql(sql_max_id)
-        transfer_id = rows[0]["next_id"] if rows else 1
-        
-        sql_insert = """
-            INSERT INTO transfer 
-            (transfer_id, player_id, transfer_date, transfer_season, from_club_id, to_club_id, transfer_fee, market_value_in_eur)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-        """
-        
-        run_sql(sql_insert, (
-            transfer_id,
-            player_id,
-            transfer_date,
-            data.get("transfer_season") or None,
-            int(data.get("from_club_id")) if data.get("from_club_id") else None,
-            int(data.get("to_club_id")),
-            int(data.get("transfer_fee")) if data.get("transfer_fee") else None,
-            int(data.get("market_value_in_eur")) if data.get("market_value_in_eur") else None
-        ))
-        
-        return jsonify({"transfer_id": transfer_id, "success": True}), 201
-        
-    except Exception as err:
-        return jsonify({"error": str(err), "details": repr(err)}), 500
+        data = request.get_json() or {}
 
-# Update transfer
-@app.post("/api/transfer/<int:transfer_id>/update")
-def api_transfer_update(transfer_id):
-    try:
-        data = request.get_json()
-        
         # Validate required fields
-        if not data.get("player_id"):
-            return jsonify({"error": "Player ID is required"}), 400
-        if not data.get("transfer_date"):
-            return jsonify({"error": "Transfer date is required"}), 400
-        if not data.get("to_club_id"):
-            return jsonify({"error": "To club ID is required"}), 400
-        
-        sql_update = """
-            UPDATE transfer 
-            SET player_id=%s, transfer_date=%s, transfer_season=%s, from_club_id=%s, to_club_id=%s, transfer_fee=%s, market_value_in_eur=%s
-            WHERE transfer_id=%s
+        required = ["player_id", "to_club_id", "transfer_date"]
+        for f in required:
+            if not data.get(f):
+                return jsonify({"error": f"{f} is required"}), 400
+
+        def as_int(v):
+            return int(v) if (v not in [None, "", "null"]) else None
+
+        # --------------------------------------------------------
+        # GET NEXT transfer_id (INTEGER, NOT UUID)
+        # --------------------------------------------------------
+        rows, _ = run_sql("SELECT COALESCE(MAX(transfer_id), 0) + 1 AS next_id FROM transfer")
+        transfer_id = rows[0]["next_id"]
+
+        # --------------------------------------------------------
+        # FETCH PLAYER NAME
+        # --------------------------------------------------------
+        p_rows, _ = run_sql("SELECT name FROM player WHERE player_id=%s", (data["player_id"],))
+        player_name = p_rows[0]["name"] if p_rows else None
+
+        # --------------------------------------------------------
+        # FETCH CLUB NAMES
+        # --------------------------------------------------------
+        from_club_name = None
+        if data.get("from_club_id"):
+            f_rows, _ = run_sql("SELECT name FROM club WHERE club_id=%s", (data["from_club_id"],))
+            from_club_name = f_rows[0]["name"] if f_rows else None
+
+        to_club_name = None
+        if data.get("to_club_id"):
+            t_rows, _ = run_sql("SELECT name FROM club WHERE club_id=%s", (data["to_club_id"],))
+            to_club_name = t_rows[0]["name"] if t_rows else None
+
+        # --------------------------------------------------------
+        # SQL INSERT
+        # --------------------------------------------------------
+        sql = """
+            INSERT INTO transfer
+            (transfer_id, player_id, from_club_id, to_club_id,
+             transfer_date, transfer_season, transfer_fee, market_value_in_eur)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
         """
-        
-        run_sql(sql_update, (
-            int(data.get("player_id")),
+
+        run_sql(sql, (
+            transfer_id,
+            as_int(data.get("player_id")),
+            as_int(data.get("from_club_id")),
+            as_int(data.get("to_club_id")),
             data.get("transfer_date"),
             data.get("transfer_season") or None,
-            int(data.get("from_club_id")) if data.get("from_club_id") else None,
-            int(data.get("to_club_id")),
-            int(data.get("transfer_fee")) if data.get("transfer_fee") else None,
-            int(data.get("market_value_in_eur")) if data.get("market_value_in_eur") else None,
+            as_int(data.get("transfer_fee")),
+            as_int(data.get("market_value_in_eur"))
+        ))
+
+        # --------------------------------------------------------
+        # MONGO INSERT (MATCH ETL STRUCTURE)
+        # --------------------------------------------------------
+        def mongo_insert(db):
+            doc = {
+                "_id": transfer_id,
+                "from": {
+                    "player_id": as_int(data.get("player_id")),
+                    "market_value_in_eur": as_int(data.get("market_value_in_eur"))
+                },
+                "to": {
+                    "transfer_date": data.get("transfer_date"),
+                    "transfer_fee": as_int(data.get("transfer_fee")),
+                    "transfer_season": data.get("transfer_season")
+                },
+
+                # 🔥 ADD FLATTENED KEYS FOR FRONTEND TABLE
+                "transfer_date": data.get("transfer_date"),
+                "transfer_fee": as_int(data.get("transfer_fee")),
+                "transfer_season": data.get("transfer_season"),
+
+                "player_name": player_name,
+                "from_club_name": from_club_name,
+                "to_club_name": to_club_name,
+                "updated_at": int(time.time())
+            }
+
+            return db.transfers.insert_one(doc)
+
+
+        run_mongo(mongo_insert)
+
+        return jsonify({
+            "success": True,
+            "transfer_id": transfer_id
+        }), 201
+
+    except Exception as err:
+        return jsonify({"error": str(err), "details": repr(err)}), 500
+
+
+@app.post("/api/transfer/<transfer_id>/update")
+def api_update_transfer(transfer_id):
+    try:
+        data = request.get_json() or {}
+
+        # --------------------------------------------------------
+        # VALIDATION
+        # --------------------------------------------------------
+        required = ["player_id", "to_club_id", "transfer_date"]
+        for f in required:
+            if not data.get(f):
+                return jsonify({"error": f"{f} is required"}), 400
+
+        def as_int(v):
+            return int(v) if (v not in [None, "", "null"]) else None
+
+        # --------------------------------------------------------
+        # FETCH PLAYER NAME
+        # --------------------------------------------------------
+        player_name = None
+        p_rows, _ = run_sql("SELECT name FROM player WHERE player_id=%s",
+                            (data["player_id"],))
+        if p_rows:
+            player_name = p_rows[0]["name"]
+
+        # --------------------------------------------------------
+        # FETCH CLUB NAMES
+        # --------------------------------------------------------
+        from_club_name = None
+        if data.get("from_club_id"):
+            f_rows, _ = run_sql("SELECT name FROM club WHERE club_id=%s",
+                                (data["from_club_id"],))
+            if f_rows:
+                from_club_name = f_rows[0]["name"]
+
+        to_club_name = None
+        if data.get("to_club_id"):
+            t_rows, _ = run_sql("SELECT name FROM club WHERE club_id=%s",
+                                (data["to_club_id"],))
+            if t_rows:
+                to_club_name = t_rows[0]["name"]
+
+        # --------------------------------------------------------
+        # UPDATE SQL
+        # --------------------------------------------------------
+        sql = """
+            UPDATE transfer SET
+                player_id=%s,
+                from_club_id=%s,
+                to_club_id=%s,
+                transfer_date=%s,
+                transfer_season=%s,
+                transfer_fee=%s,
+                market_value_in_eur=%s
+            WHERE transfer_id=%s
+        """
+
+        run_sql(sql, (
+            as_int(data.get("player_id")),
+            as_int(data.get("from_club_id")),
+            as_int(data.get("to_club_id")),
+            data.get("transfer_date"),
+            data.get("transfer_season") or None,
+            as_int(data.get("transfer_fee")),
+            as_int(data.get("market_value_in_eur")),
             transfer_id
         ))
-        
-        return jsonify({"transfer_id": transfer_id, "success": True}), 200
-        
+
+        # --------------------------------------------------------
+        # UPDATE MONGO (ETL-CORRECT SHAPE)
+        # Entire document must match ETL structure
+        # --------------------------------------------------------
+        def mongo_update(db):
+            new_doc = {
+                "from": {
+                    "player_id": as_int(data.get("player_id")),
+                    "market_value_in_eur": as_int(data.get("market_value_in_eur"))
+                },
+                "to": {
+                    "transfer_date": data.get("transfer_date"),
+                    "transfer_fee": as_int(data.get("transfer_fee")),
+                    "transfer_season": data.get("transfer_season")
+                },
+
+                "transfer_date": data.get("transfer_date"),
+                "transfer_fee": as_int(data.get("transfer_fee")),
+                "transfer_season": data.get("transfer_season"),
+
+                "player_name": player_name,
+                "from_club_name": from_club_name,
+                "to_club_name": to_club_name,
+                "updated_at": int(time.time())
+            }
+
+            return db.transfers.update_one(
+                {"_id": as_int(transfer_id)},
+                {"$set": new_doc}
+            )
+
+        run_mongo(mongo_update)
+
+        return jsonify({
+            "success": True,
+            "transfer_id": transfer_id
+        }), 200
+
     except Exception as err:
         return jsonify({"error": str(err), "details": repr(err)}), 500
 
-# Delete transfer
-@app.delete("/api/transfer/<int:transfer_id>")
-def api_transfer_delete(transfer_id):
+@app.delete("/api/transfer/<transfer_id>")
+def api_delete_transfer(transfer_id):
     try:
-        sql_delete = "DELETE FROM transfer WHERE transfer_id=%s"
-        run_sql(sql_delete, (transfer_id,))
-        
-        return jsonify({"success": True, "message": f"Transfer {transfer_id} deleted"}), 200
-    
-    except Exception as err:
-        return jsonify({"error": str(err), "details": repr(err)}), 500
+        # --------------------------------------------------------
+        # DELETE FROM SQL
+        # --------------------------------------------------------
+        run_sql(
+            "DELETE FROM transfer WHERE transfer_id=%s",
+            (transfer_id,)
+        )
 
-# Mongo: delete transfer document
-@app.delete("/api/mongo/transfer/<int:transfer_id>")
-def api_mongo_transfer_delete(transfer_id):
-    def _del(db):
-        res = db.transfers.delete_one({"_id": transfer_id})
-        return {"deleted": res.deleted_count}
-    data, ms = run_mongo(_del)
-    if data.get("deleted") == 0:
-        return jsonify({"error": "Transfer not found", "ms": ms, "source": "mongo"}), 404
-    return jsonify({"success": True, "transfer_id": transfer_id, "ms": ms, "source": "mongo"})
+        # --------------------------------------------------------
+        # DELETE FROM MONGO
+        # Transfers in Mongo store transfer_id as "_id" (int)
+        # --------------------------------------------------------
+        def mongo_delete(db):
+            try:
+                transfer_id_cast = int(transfer_id)
+            except:
+                transfer_id_cast = transfer_id
+
+            return db.transfers.delete_one({"_id": transfer_id_cast})
+
+        run_mongo(mongo_delete)
+
+        return jsonify({
+            "success": True,
+            "transfer_id": transfer_id
+        }), 200
+
+    except Exception as err:
+        return jsonify({
+            "error": str(err),
+            "details": repr(err)
+        }), 500
+
 
 # Game Events routes
 @app.route("/game-events")
@@ -3516,101 +3907,192 @@ def api_mongo_game_event_get(event_id):
             return jsonify(dict(row=ev_out))
     return jsonify({"error": "Event not found"}), 404
 
-# Mongo: Create game event (append to game's events array)
-@app.post("/api/mongo/game-event")
-def api_mongo_game_event_create():
-    data = request.get_json() or {}
-    game_id = data.get("game_id")
-    if game_id is None:
-        return jsonify({"error": "game_id required"}), 400
-    # Accept int or str game id (depending on ETL)
+def generate_event_id():
+    return uuid.uuid4().hex  # 32 character hex
+
+@app.post("/api/game-event")
+def api_create_game_event():
     try:
-        game_id_cast = int(game_id)
-    except (TypeError, ValueError):
-        game_id_cast = game_id
-    game_doc = mongo_db.games.find_one({"_id": game_id_cast}, {"_id":1})
-    if not game_doc:
-        return jsonify({"error": "Game not found"}), 404
+        data = request.get_json() or {}
 
-    new_id = mongo_next_sequence("game_event_id")
-    # Optionally enrich names from Mongo players collection
-    def _player_name(pid):
-        if pid is None: return None
-        doc = mongo_db.players.find_one({"player_id": pid}, {"name":1})
-        return doc.get("name") if doc else None
+        required = ["game_id", "minute", "type"]
+        for f in required:
+            if not data.get(f):
+                return jsonify({"error": f"{f} is required"}), 400
 
-    event_doc = {
-        "game_event_id": new_id,
-        "minute": data.get("minute"),
-        "type": data.get("type"),
-        "club_id": data.get("club_id"),
-        "player_id": data.get("player_id"),
-        "player_name": data.get("player_name") or _player_name(data.get("player_id")),
-        "sub_in_id": data.get("player_in_id"),
-        "player_in_name": data.get("player_in_name") or _player_name(data.get("player_in_id")),
-        "assist_id": data.get("player_assist_id"),
-        "assist_name": data.get("assist_name") or _player_name(data.get("player_assist_id")),
-        "event_desc": data.get("description") or data.get("event_desc")
-    }
-    mongo_db.games.update_one({"_id": game_id_cast}, {"$push": {"events": event_doc}})
-    event_doc["game_id"] = game_id_cast
-    return jsonify(dict(row=event_doc)), 201
+        def as_int(v):
+            return int(v) if (v not in [None, "", "null"]) else None
 
-# Mongo: Update game event
-@app.post("/api/mongo/game-event/<event_id>/update")
-def api_mongo_game_event_update(event_id):
-    data = request.get_json() or {}
+        # --------------------------------------------------------
+        # GENERATE game_event_id (correct 32-char hex)
+        # --------------------------------------------------------
+        game_event_id = generate_event_id()
+
+        # --------------------------------------------------------
+        # Fetch names
+        # --------------------------------------------------------
+        def get_name(table, key):
+            if not data.get(key):
+                return None
+            rows, _ = run_sql(f"SELECT name FROM {table} WHERE {table}_id=%s",
+                              (data[key],))
+            return rows[0]["name"] if rows else None
+
+        player_name = get_name("player", "player_id")
+        assist_name = get_name("player", "player_assist_id")
+        player_in_name = get_name("player", "player_in_id")
+        club_name = get_name("club", "club_id")
+
+        # --------------------------------------------------------
+        # SQL INSERT
+        # --------------------------------------------------------
+        sql = """
+            INSERT INTO game_events
+            (game_event_id, game_id, minute, type, club_id,
+             player_id, player_assist_id, player_in_id, description)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        """
+
+        run_sql(sql, (
+            game_event_id,
+            as_int(data.get("game_id")),
+            as_int(data.get("minute")),
+            data.get("type"),
+            as_int(data.get("club_id")),
+            as_int(data.get("player_id")),
+            as_int(data.get("player_assist_id")),
+            as_int(data.get("player_in_id")),
+            data.get("description")
+        ))
+
+        # --------------------------------------------------------
+        # MONGO INSERT
+        # --------------------------------------------------------
+        def mongo_insert(db):
+            # Convert to int if needed because games._id is int in ETL
+            try:
+                game_id_cast = int(data.get("game_id"))
+            except:
+                game_id_cast = data.get("game_id")
+
+            event_doc = {
+                "game_event_id": game_event_id,  # YOUR SQL ID
+                "minute": as_int(data.get("minute")),
+                "type": data.get("type"),
+                "club_id": as_int(data.get("club_id")),
+                "player_id": as_int(data.get("player_id")),
+                "player_name": player_name,
+                "sub_in_id": as_int(data.get("player_in_id")),
+                "player_in_name": player_in_name,
+                "assist_id": as_int(data.get("player_assist_id")),
+                "assist_name": assist_name,
+                "event_desc": data.get("description"),
+            }
+
+            return db.games.update_one(
+                {"_id": game_id_cast},
+                {"$push": {"events": event_doc}}
+            )
+
+        run_mongo(mongo_insert)
+
+        return jsonify({
+            "success": True,
+            "game_event_id": game_event_id
+        }), 201
+
+    except Exception as err:
+        return jsonify({"error": str(err), "details": repr(err)}), 500
+
+@app.post("/api/game-event/<event_id>/update")
+def api_game_event_update(event_id):
     try:
-        eid_int = int(event_id)
-        id_query_vals = [eid_int, event_id]
-    except ValueError:
-        id_query_vals = [event_id]
-    game_doc = mongo_db.games.find_one({"events.game_event_id": {"$in": id_query_vals}}, {"_id":1})
-    if not game_doc:
-        return jsonify({"error": "Event not found"}), 404
-    game_id = game_doc.get("_id")
+        data = request.get_json() or {}
 
-    # Build update fields (only set provided keys)
-    set_ops = {}
-    mapping = {
-        "minute": "minute",
-        "type": "type",
-        "club_id": "club_id",
-        "player_id": "player_id",
-        "player_name": "player_name",
-        "player_in_id": "sub_in_id",
-        "player_in_name": "player_in_name",
-        "player_assist_id": "assist_id",
-        "assist_name": "assist_name",
-        "description": "event_desc",
-        "event_desc": "event_desc"
-    }
-    for inp_key, field in mapping.items():
-        if inp_key in data:
-            set_ops[f"events.$.{field}"] = data.get(inp_key)
-    if not set_ops:
-        return jsonify({"error": "No fields to update"}), 400
+        # --------------------------------------------------------
+        # VALIDATE REQUIRED FIELDS
+        # --------------------------------------------------------
+        if not data.get("game_id"):
+            return jsonify({"error": "Game ID is required"}), 400
+        if not data.get("type"):
+            return jsonify({"error": "Event type is required"}), 400
 
-    res = mongo_db.games.update_one({"_id": game_id, "events.game_event_id": {"$in": id_query_vals}}, {"$set": set_ops})
-    if res.modified_count == 0:
-        return jsonify({"error": "Update failed"}), 500
-    return jsonify({"success": True, "game_event_id": event_id})
+        def as_int(v):
+            return int(v) if (v not in [None, "", "null"]) else None
 
-# Mongo: Delete game event
-@app.delete("/api/mongo/game-event/<event_id>")
-def api_mongo_game_event_delete(event_id):
-    try:
-        eid_int = int(event_id)
-        id_query_vals = [eid_int, event_id]
-    except ValueError:
-        id_query_vals = [event_id]
-    game_doc = mongo_db.games.find_one({"events.game_event_id": {"$in": id_query_vals}}, {"_id":1})
-    if not game_doc:
-        return jsonify({"error": "Event not found"}), 404
-    res = mongo_db.games.update_one({"_id": game_doc.get("_id")}, {"$pull": {"events": {"game_event_id": {"$in": id_query_vals}}}})
-    if res.modified_count == 0:
-        return jsonify({"error": "Delete failed"}), 500
-    return jsonify({"success": True, "deleted": event_id})
+        # --------------------------------------------------------
+        # SQL UPDATE
+        # --------------------------------------------------------
+        sql = """
+            UPDATE game_events SET 
+                game_id=%s,
+                minute=%s,
+                type=%s,
+                club_id=%s,
+                player_id=%s,
+                description=%s,
+                player_in_id=%s,
+                player_assist_id=%s
+            WHERE game_event_id=%s
+        """
+
+        run_sql(sql, (
+            as_int(data.get("game_id")),
+            as_int(data.get("minute")),
+            data.get("type"),
+            as_int(data.get("club_id")),
+            as_int(data.get("player_id")),
+            data.get("description"),
+            as_int(data.get("player_in_id")),
+            as_int(data.get("player_assist_id")),
+            event_id
+        ))
+
+        # --------------------------------------------------------
+        # MONGO UPDATE (NESTED ARRAY)
+        # --------------------------------------------------------
+        def mongo_update(db):
+            # Games use int IDs in ETL dataset
+            try:
+                game_id_cast = int(data.get("game_id"))
+            except:
+                game_id_cast = data.get("game_id")
+
+            # Rebuild the exact identical event document shape
+            update_fields = {}
+
+            mapping = {
+                "minute": "minute",
+                "type": "type",
+                "club_id": "club_id",
+                "player_id": "player_id",
+                "description": "event_desc",
+                "player_in_id": "sub_in_id",
+                "player_assist_id": "assist_id",
+                "player_name": "player_name",
+                "player_in_name": "player_in_name",
+                "assist_name": "assist_name"
+            }
+
+            for key, field in mapping.items():
+                if key in data:
+                    update_fields[f"events.$.{field}"] = data.get(key)
+
+            if not update_fields:
+                return None
+
+            return db.games.update_one(
+                {"_id": game_id_cast, "events.game_event_id": event_id},
+                {"$set": update_fields}
+            )
+
+        run_mongo(mongo_update)
+
+        return jsonify({"success": True, "game_event_id": event_id}), 200
+
+    except Exception as err:
+        return jsonify({"error": str(err), "details": repr(err)}), 500
+
 
 # Get single game event
 @app.get("/api/game-event/<event_id>")
@@ -3665,52 +4147,49 @@ def api_game_event_create():
     except Exception as err:
         return jsonify({"error": str(err), "details": repr(err)}), 500
 
-# Update game event
-@app.post("/api/game-event/<event_id>/update")
-def api_game_event_update(event_id):
-    try:
-        data = request.get_json()
-        
-        # Validate required fields
-        if not data.get("game_id"):
-            return jsonify({"error": "Game ID is required"}), 400
-        if not data.get("type"):
-            return jsonify({"error": "Event type is required"}), 400
-        
-        sql_update = """
-            UPDATE game_events 
-            SET game_id=%s, minute=%s, type=%s, club_id=%s, player_id=%s, description=%s, player_in_id=%s, player_assist_id=%s
-            WHERE game_event_id=%s
-        """
-        
-        run_sql(sql_update, (
-            int(data.get("game_id")),
-            int(data.get("minute")) if data.get("minute") else None,
-            data.get("type"),
-            int(data.get("club_id")) if data.get("club_id") else None,
-            int(data.get("player_id")) if data.get("player_id") else None,
-            data.get("description") or None,
-            int(data.get("player_in_id")) if data.get("player_in_id") else None,
-            int(data.get("player_assist_id")) if data.get("player_assist_id") else None,
-            event_id
-        ))
-        
-        return jsonify({"game_event_id": event_id, "success": True}), 200
-        
-    except Exception as err:
-        return jsonify({"error": str(err), "details": repr(err)}), 500
-
-# Delete game event
 @app.delete("/api/game-event/<event_id>")
-def api_game_event_delete(event_id):
+def api_delete_game_event(event_id):
     try:
-        sql_delete = "DELETE FROM game_events WHERE game_event_id=%s"
-        run_sql(sql_delete, (event_id,))
-        
-        return jsonify({"success": True, "message": f"Event {event_id} deleted"}), 200
-    
+        # --------------------------------------------------------
+        # GET game_id FROM SQL (no need for frontend to send it)
+        # --------------------------------------------------------
+        rows, _ = run_sql(
+            "SELECT game_id FROM game_events WHERE game_event_id=%s",
+            (event_id,)
+        )
+
+        if not rows:
+            return jsonify({"error": "Event not found"}), 404
+
+        game_id = rows[0]["game_id"]
+
+        # --------------------------------------------------------
+        # DELETE FROM SQL
+        # --------------------------------------------------------
+        run_sql("DELETE FROM game_events WHERE game_event_id=%s", (event_id,))
+
+        # --------------------------------------------------------
+        # DELETE FROM MONGO (games.events[])
+        # --------------------------------------------------------
+        def mongo_delete(db):
+            return db.games.update_one(
+                {"_id": game_id},
+                {"$pull": {"events": {"game_event_id": event_id}}}
+            )
+
+        run_mongo(mongo_delete)
+
+        return jsonify({
+            "success": True,
+            "game_event_id": event_id
+        }), 200
+
     except Exception as err:
-        return jsonify({"error": str(err), "details": repr(err)}), 500
+        return jsonify({
+            "error": str(err),
+            "details": repr(err)
+        }), 500
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "8000")), debug=True)
