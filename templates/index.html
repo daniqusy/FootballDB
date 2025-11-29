@@ -199,6 +199,40 @@
     <aside class="col-12 col-lg-3 mb-3">
       <div class="card">
         <div class="card-header fw-semibold">Top market values</div>
+        <div
+          class="p-2 d-flex align-items-center flex-wrap gap-2"
+          id="top-market-controls"
+        >
+          <select
+            id="top-market-source"
+            class="form-select form-select-sm"
+            style="width: auto"
+          >
+            <option value="sql">SQL</option>
+            <option value="mongo">Mongo</option>
+          </select>
+          <div
+            class="form-check form-switch"
+            id="top-market-compare-wrap"
+            title="Compare both sources"
+          >
+            <input
+              class="form-check-input"
+              type="checkbox"
+              id="top-market-compare"
+            />
+            <label class="form-check-label small" for="top-market-compare"
+              >Compare</label
+            >
+          </div>
+          <button
+            id="top-market-perf-more"
+            class="btn btn-link btn-sm p-0 ms-auto"
+            style="display: none"
+          >
+            More…
+          </button>
+        </div>
         <ul class="list-group list-group-flush" id="top-market">
           <li class="list-group-item">
             <span class="skeleton inline-skeleton"></span>
@@ -312,13 +346,58 @@
       );
     }
     const srcLabel = source.toUpperCase();
-    // Performance modal activation for SQL primary source only
+    // Performance modal activation: show if either SQL or Mongo perf is present
     const perfBtn = document.getElementById("perf-more");
-    const usePerf = source === "sql" && data.perf;
-    if (usePerf) {
+    const sqlPerf =
+      source === "sql" ? data.perf : compare ? compareData?.perf : null;
+    const mongoPerf =
+      source === "mongo" ? data.perf : compare ? compareData?.perf : null;
+    const hasAnyPerf = Boolean(sqlPerf || mongoPerf);
+    if (hasAnyPerf) {
       perfBtn.style.display = "";
-      perfBtn.onclick = () =>
-        openPerfModal("Matches by date", data.perf, sqlQueryText(dateStr));
+      perfBtn.onclick = async () => {
+        let enrichedMongoPerf = mongoPerf;
+        let mongoCount =
+          source === "mongo"
+            ? data.rows?.length ?? null
+            : compare
+            ? compareData?.rows?.length ?? null
+            : null;
+        // Lazy fetch explain only when opening modal if Mongo part present and explain missing
+        if (enrichedMongoPerf && enrichedMongoPerf.explain == null) {
+          try {
+            const resp = await fetch(
+              `/api/mongo/matches/by-date?date=${encodeURIComponent(
+                dateStr
+              )}&perf=1`
+            );
+            const j = await resp.json();
+            if (j.perf) {
+              enrichedMongoPerf = j.perf;
+              mongoCount = j.rows?.length ?? mongoCount;
+            }
+          } catch {}
+        }
+        openPerfModal(
+          "Matches by date",
+          {
+            perf: sqlPerf,
+            ms: source === "sql" ? data.ms : compare ? compareData?.ms : null,
+            count:
+              source === "sql"
+                ? data.rows?.length ?? null
+                : compare
+                ? compareData?.rows?.length ?? null
+                : null,
+            sqlText: sqlPerf?.query || sqlQueryText(dateStr),
+          },
+          {
+            perf: enrichedMongoPerf,
+            ms: source === "mongo" ? data.ms : compare ? compareData?.ms : null,
+            count: mongoCount,
+          }
+        );
+      };
     } else {
       perfBtn.style.display = "none";
     }
@@ -415,12 +494,26 @@
       });
   }
 
-  // Build a pseudo SQL string for display (sanitized)
+  // Fallback SQL string for display when server doesn't provide perf.query
   function sqlQueryText(dateStr) {
-    return `SELECT ... FROM game WHERE date = '${dateStr}'`; // simplified
+    return (
+      "SELECT\n" +
+      "  g.competition_id                 AS league_id,\n" +
+      "  g.game_id,\n" +
+      "  g.home_club_id,  hc.name         AS home_name,\n" +
+      "  g.away_club_id,  ac.name         AS away_name,\n" +
+      "  g.home_club_goals, g.away_club_goals,\n" +
+      "  c.name                            AS league_name\n" +
+      "FROM game g\n" +
+      "JOIN club hc ON hc.club_id = g.home_club_id\n" +
+      "JOIN club ac ON ac.club_id = g.away_club_id\n" +
+      "JOIN competition c ON c.competition_id = g.competition_id\n" +
+      `WHERE g.date = '${dateStr}'\n` +
+      "ORDER BY g.competition_id, g.game_id\n"
+    );
   }
 
-  function openPerfModal(title, perf, sqlText) {
+  function openPerfModal(title, sqlSection, mongoSection) {
     const modalId = "perf-modal";
     let wrap = document.getElementById(modalId);
     if (!wrap) {
@@ -446,59 +539,133 @@
       document.body.appendChild(wrap);
     }
     const body = wrap.querySelector("#perf-body");
-    const qc = perf.query_cache || {};
-    const qcRows = Object.keys(qc)
-      .map((k) => `<tr><td>${k}</td><td>${qc[k]}</td></tr>`)
-      .join("");
-    body.innerHTML = `
-      <h6 class="fw-semibold mb-2">${title}</h6>
-      <pre class="small bg-light p-2 rounded border" style="white-space:pre-wrap">${sqlText}</pre>
-      <table class="table table-sm mb-3">
-        <tbody>
-          <tr><th style="width:180px">Execution time</th><td>${
-            perf.execution_ms ?? "—"
-          } ms</td></tr>
-          <tr><th>Diagnostics time</th><td>${
-            perf.diagnostics_ms ?? "—"
-          } ms</td></tr>
-          <tr><th>Total (exec + diag)</th><td>${
-            perf.total_ms ?? "—"
-          } ms</td></tr>
-          <tr><th style="width:180px">Rows examined</th><td>${
-            perf.rows_examined ?? "—"
-          }</td></tr>
-          <tr><th>Rows sent</th><td>${perf.rows_sent ?? "—"}</td></tr>
-          <tr><th>Explain type</th><td>${perf.explain_type ?? "—"}</td></tr>
-        </tbody>
-      </table>
-      <div class="mb-3">
-        <div class="fw-semibold">Explain Plan</div>
-        <pre class="small bg-dark text-light p-2 rounded" style="max-height:240px;overflow:auto;white-space:pre-wrap">${
-          perf.explain || "No explain output"
-        }</pre>
-      </div>
-      <div>
-        <div class="fw-semibold">Query Cache Stats</div>
-        <table class="table table-sm"><tbody>${
-          qcRows ||
-          '<tr><td colspan="2" class="text-muted">Not supported</td></tr>'
-        }</tbody></table>
-      </div>`;
+    const renderSQL = () => {
+      if (!sqlSection?.perf) return "";
+      const perf = sqlSection.perf || {};
+      return `
+        <div class="mb-3">
+          <div class="d-flex justify-content-between align-items-center">
+            <h6 class="fw-semibold mb-2">${title} — SQL</h6>
+            <span class="badge text-bg-primary">${
+              perf.execution_ms ?? perf.total_ms ?? ""
+            } ms</span>
+          </div>
+          ${
+            sqlSection.sqlText
+              ? `<pre class="small bg-light p-2 rounded border" style="white-space:pre-wrap">${sqlSection.sqlText}</pre>`
+              : ""
+          }
+          <table class="table table-sm mb-3">
+            <tbody>
+              <tr><th style="width:180px">Execution time</th><td>${
+                perf.execution_ms ?? "—"
+              } ms</td></tr>
+              <tr><th>Diagnostics time</th><td>${
+                perf.diagnostics_ms ?? "—"
+              } ms</td></tr>
+              <tr><th>Total (exec + diag)</th><td>${
+                perf.total_ms ?? "—"
+              } ms</td></tr>
+              <tr><th style="width:180px">Rows examined</th><td>${
+                perf.rows_examined ?? "—"
+              }</td></tr>
+              <tr><th>Rows sent</th><td>${perf.rows_sent ?? "—"}</td></tr>
+              <tr><th>Explain type</th><td>${perf.explain_type ?? "—"}</td></tr>
+            </tbody>
+          </table>
+          <div class="mb-3">
+            <div class="fw-semibold">Explain Plan</div>
+            <pre class="small bg-dark text-light p-2 rounded" style="max-height:240px;overflow:auto;white-space:pre-wrap">${
+              perf.explain || "No explain output"
+            }</pre>
+          </div>
+        </div>`;
+    };
+
+    const renderMongo = () => {
+      const mp = mongoSection?.perf || {};
+      const ms = mongoSection?.ms ?? mp.ms ?? mp.execution_ms ?? null;
+      const stages = mp.explain || mp.stages || null;
+      const stats = mp.stats || {};
+      const queryText = mp.query
+        ? typeof mp.query === "string"
+          ? mp.query
+          : JSON.stringify(mp.query, null, 2)
+        : null;
+      const hasDetails = Boolean(mongoSection?.perf);
+      return `
+        <div class="mb-3">
+          <div class="d-flex justify-content-between align-items-center">
+            <h6 class="fw-semibold mb-2">${title} — Mongo</h6>
+            <span class="badge text-bg-success">${ms ?? "—"} ms</span>
+          </div>
+          ${
+            queryText
+              ? `<pre class="small bg-light p-2 rounded border" style="white-space:pre-wrap">${queryText}</pre>`
+              : ""
+          }
+          <table class="table table-sm mb-3">
+            <tbody>
+              ${
+                mongoSection?.count != null
+                  ? `<tr><th style=\"width:180px\">Rows</th><td>${mongoSection.count}</td></tr>`
+                  : ""
+              }
+              ${
+                Object.keys(stats).length
+                  ? Object.keys(stats)
+                      .map((k) => `<tr><td>${k}</td><td>${stats[k]}</td></tr>`)
+                      .join("")
+                  : hasDetails
+                  ? '<tr><td colspan="2" class="text-muted">No stats available</td></tr>'
+                  : ""
+              }
+            </tbody>
+          </table>
+          ${
+            hasDetails
+              ? `
+            <div>
+              <div class="fw-semibold">Explain / Pipeline</div>
+              <pre class="small bg-dark text-light p-2 rounded" style="max-height:240px;overflow:auto;white-space:pre-wrap">${
+                stages
+                  ? typeof stages === "string"
+                    ? stages
+                    : JSON.stringify(stages, null, 2)
+                  : "No explain output"
+              }</pre>
+            </div>`
+              : ""
+          }
+        </div>`;
+    };
+
+    body.innerHTML = `${renderSQL()}${renderMongo()}`;
     const modal = bootstrap.Modal.getOrCreateInstance(wrap);
     modal.show();
   }
 
   async function loadTopMarket() {
-    const source = document.getElementById("data-source").value;
-    const endpoint =
-      source === "mongo"
-        ? "/api/mongo/players/top-market"
-        : "/api/players/top-market";
-    const data = await fetchJSON(endpoint + "?k=10");
+    const sourceSel = document.getElementById("top-market-source");
+    const compare = document.getElementById("top-market-compare").checked;
+    const source = sourceSel.value;
+    const baseQ = "?k=10";
+    const fetchOne = async (src) => {
+      const ep =
+        src === "mongo"
+          ? "/api/mongo/players/top-market"
+          : "/api/players/top-market";
+      // Initial load: do NOT request Mongo explain; keep ms fast
+      return fetchJSON(ep + baseQ); // SQL already returns perf via run_sql_ex
+    };
+    const primary = await fetchOne(source);
+    let secondary = null;
+    if (compare) {
+      secondary = await fetchOne(source === "sql" ? "mongo" : "sql");
+    }
     const ul = document.getElementById("top-market");
-    const meta = document.getElementById("market-meta");
     ul.innerHTML = "";
-    data.rows.forEach((p, idx) => {
+    primary.rows.forEach((p, idx) => {
       const li = document.createElement("li");
       li.className =
         "list-group-item d-flex justify-content-between align-items-center";
@@ -513,22 +680,77 @@
                     <span class="badge text-bg-success">€${val}</span>`;
       ul.appendChild(li);
     });
-    meta.innerHTML = `Source: ${source.toUpperCase()} • Query time: ${
-      data.ms
-    } ms ${
-      data.perf && source === "sql"
-        ? '<button id="top-perf-more" class="btn btn-link btn-sm p-0 align-baseline">More…</button>'
-        : ""
-    }`;
-    const btn = document.getElementById("top-perf-more");
-    if (btn && data.perf && source === "sql") {
-      btn.addEventListener("click", () =>
+    // Performance / compare meta badges
+    const perfBtn = document.getElementById("top-market-perf-more");
+    const sqlPerf =
+      source === "sql" ? primary.perf : compare ? secondary?.perf : null;
+    const mongoPerf =
+      source === "mongo" ? primary.perf : compare ? secondary?.perf : null;
+    const hasPerf = Boolean(sqlPerf || mongoPerf);
+    if (hasPerf) {
+      perfBtn.style.display = "";
+      perfBtn.onclick = async () => {
+        let enrichedMongoPerf = mongoPerf;
+        let mongoCount =
+          source === "mongo"
+            ? primary.rows?.length ?? null
+            : compare
+            ? secondary?.rows?.length ?? null
+            : null;
+        if (enrichedMongoPerf && enrichedMongoPerf.explain == null) {
+          try {
+            const resp = await fetch(
+              `/api/mongo/players/top-market?k=10&perf=1`
+            );
+            const j = await resp.json();
+            if (j.perf) {
+              enrichedMongoPerf = j.perf;
+              mongoCount = j.rows?.length ?? mongoCount;
+            }
+          } catch {}
+        }
         openPerfModal(
           "Top market values",
-          data.perf,
-          "SELECT ... FROM player WHERE market_value_eur IS NOT NULL ORDER BY market_value_eur DESC LIMIT 10"
-        )
-      );
+          {
+            perf: sqlPerf,
+            ms: source === "sql" ? primary.ms : compare ? secondary?.ms : null,
+            count:
+              source === "sql"
+                ? primary.rows?.length ?? null
+                : compare
+                ? secondary?.rows?.length ?? null
+                : null,
+            sqlText:
+              sqlPerf?.query ||
+              "SELECT p.player_id, p.name, p.market_value_eur, p.current_club_id\nFROM player p\nWHERE p.market_value_eur IS NOT NULL\nORDER BY p.market_value_eur DESC\nLIMIT 10",
+          },
+          {
+            perf: enrichedMongoPerf,
+            ms:
+              source === "mongo" ? primary.ms : compare ? secondary?.ms : null,
+            count: mongoCount,
+          }
+        );
+      };
+    } else {
+      perfBtn.style.display = "none";
+    }
+    // Meta badge rendering below list header controls
+    const meta = document.getElementById("market-meta");
+    if (compare && secondary) {
+      const aFaster = Number(primary.ms) < Number(secondary.ms);
+      const bFaster = Number(secondary.ms) < Number(primary.ms);
+      const aClass = aFaster ? "faster" : bFaster ? "slower" : "";
+      const bClass = bFaster ? "faster" : aFaster ? "slower" : "";
+      meta.innerHTML = `<span class="meta-badges"><span class="meta-badge ${aClass}">${source.toUpperCase()} ${
+        primary.ms
+      } ms</span><span class="meta-sep">|</span><span class="meta-badge ${bClass}">${
+        source === "sql" ? "Mongo" : "SQL"
+      } ${secondary.ms} ms</span></span>`;
+    } else {
+      meta.innerHTML = `<span class="meta-badges"><span class="meta-badge">${source.toUpperCase()} ${
+        primary.ms
+      } ms</span></span>`;
     }
   }
 
@@ -724,7 +946,15 @@
 
   // Run initial loads
   initPlayerSearch();
-  loadTopMarket();
+  // Initialize top-market controls
+  (function initTopMarketControls() {
+    const srcSel = document.getElementById("top-market-source");
+    srcSel.addEventListener("change", () => loadTopMarket());
+    document
+      .getElementById("top-market-compare")
+      .addEventListener("change", () => loadTopMarket());
+    loadTopMarket();
+  })();
   // Initialize source from persistence
   const persisted = loadPersistedSource();
   document.getElementById("data-source").value = persisted;

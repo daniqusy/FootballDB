@@ -1,1 +1,41 @@
-.table td, .table th { vertical-align: middle; }
+.table td,
+.table th {
+  vertical-align: middle;
+}
+
+/* Shared compare meta badges */
+.meta-badge {
+  display: inline-block;
+  padding: 0.2rem 0.6rem;
+  border-radius: 0.6rem;
+  border: 1px solid #e5e7eb;
+  background: #f9fafb;
+  color: #111827;
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+.meta-badge.faster {
+  background: #ecfdf5;
+  border-color: #d1fae5;
+  color: #065f46;
+  font-weight: 600;
+}
+.meta-badge.slower {
+  background: #fef2f2;
+  border-color: #fee2e2;
+  color: #991b1b;
+  font-weight: 600;
+}
+.meta-sep {
+  color: #9ca3af;
+  padding: 0 0.35rem;
+}
+.meta-diff {
+  color: #b91c1c;
+  font-weight: 600;
+  margin-left: 0.35rem;
+}
+.meta-badges {
+  display: inline-flex;
+  align-items: center;
+}
