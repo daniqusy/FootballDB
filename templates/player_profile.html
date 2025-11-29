@@ -362,7 +362,8 @@
 
 <script>
   async function J(u) {
-    const r = await fetch(u);
+    const sep = u.includes('?') ? '&' : '?';
+    const r = await fetch(u + sep + '_t=' + Date.now());
     return r.json();
   }
   const url = new URL(window.location.href);
@@ -493,53 +494,137 @@
     });
   }
 
-  async function loadMatches() {
+  let matchCache = { key: null, data: null };
+
+  async function loadMatches(forceRefresh = false) {
+    // Handle event object being passed as first arg
+    if (typeof forceRefresh !== 'boolean') forceRefresh = false;
+
     const cid = document.getElementById("pp-comp").value;
     const sea = document.getElementById("pp-season").value;
     if (!cid || !sea) return;
+    
     const sourceSel = document.getElementById('pp-source').value;
+    const compare = document.getElementById("pp-compare").checked;
+    
+    // 1. Fetch Primary (with caching)
+    const cacheKey = `${sourceSel}:${cid}:${sea}`;
+    let res;
+    
+    if (!forceRefresh && matchCache.key === cacheKey && matchCache.data) {
+      res = matchCache.data;
+    } else {
+      const baseUrl = sourceSel === 'mongo' ? '/api/mongo/player' : '/api/player';
+      try {
+        res = await J(`${baseUrl}/${pid}/matches?competition_id=${encodeURIComponent(cid)}&season=${encodeURIComponent(sea)}`);
+        matchCache = { key: cacheKey, data: res };
+      } catch (e) {
+        console.error("Primary fetch failed", e);
+        return; 
+      }
+    }
+
     const baseProfile = sourceSel === 'mongo' ? '/api/mongo/player' : '/api/player';
     const prof = await J(`${baseProfile}/${pid}/profile`);
     const playerClubName = prof.row?.current_club_name || "";
     const tb = document.getElementById("pp-matches");
-    const compare = document.getElementById("pp-compare").checked;
-    const baseUrl = sourceSel === 'mongo' ? '/api/mongo/player' : '/api/player';
-    const res = await J(`${baseUrl}/${pid}/matches?competition_id=${cid}&season=${sea}`);
+
+    // 2. Fetch Secondary (Compare)
     let compareRes = null;
     let hasDiff = false;
-    if (compare) {
-      const otherBase = sourceSel === 'sql' ? '/api/mongo/player' : '/api/player';
-      compareRes = await J(`${otherBase}/${pid}/matches?competition_id=${cid}&season=${sea}`);
-      hasDiff = diffPlayerRows(
-        sourceSel === 'sql' ? res.rows : compareRes.rows,
-        sourceSel === 'sql' ? compareRes.rows : res.rows
-      );
-    }
-  const metaEl = document.getElementById("pp-meta");
-  const perfBtn = document.getElementById('pp-perf-more');
-    // Activate perf modal button for SQL source
-    if (sourceSel === 'sql' && res.perf){
-      perfBtn.style.display='';
-      perfBtn.onclick = () => openPerfModal('Player matches', res.perf, buildPlayerMatchesSQL(pid, cid, sea));
+    
+    // Reset perf caches
+    window.__pp_sql_ms = null;
+    window.__pp_mongo_ms = null;
+    window.__pp_sql_perf = null;
+    window.__pp_mongo_perf = null;
+    window.__pp_last_params = `competition_id=${encodeURIComponent(cid)}&season=${encodeURIComponent(sea)}`;
+
+    // Seed primary cache
+    if (sourceSel === 'sql') {
+      window.__pp_sql_ms = res.ms; window.__pp_sql_perf = res.perf || null;
     } else {
-      perfBtn.style.display='none';
+      window.__pp_mongo_ms = res.ms; window.__pp_mongo_perf = res.perf || null;
     }
 
-    if (compare && compareRes) {
+    if (compare) {
+      const otherBase = sourceSel === 'sql' ? '/api/mongo/player' : '/api/player';
+      try {
+        compareRes = await J(`${otherBase}/${pid}/matches?competition_id=${encodeURIComponent(cid)}&season=${encodeURIComponent(sea)}`);
+        
+        if (compareRes && compareRes.rows) {
+          hasDiff = diffPlayerRows(
+            sourceSel === 'sql' ? res.rows : compareRes.rows,
+            sourceSel === 'sql' ? compareRes.rows : res.rows
+          );
+        }
+
+        // Seed secondary cache
+        if (sourceSel === 'sql') {
+          window.__pp_mongo_ms = compareRes.ms; window.__pp_mongo_perf = compareRes.perf || null;
+        } else {
+          window.__pp_sql_ms = compareRes.ms; window.__pp_sql_perf = compareRes.perf || null;
+        }
+      } catch (e) {
+        console.error("Compare fetch failed", e);
+        compareRes = { ms: null, rows: [], perf: null, error: true };
+      }
+    }
+
+    // 3. Setup "More" button
+    const metaEl = document.getElementById("pp-meta");
+    const perfBtn = document.getElementById('pp-perf-more');
+    perfBtn.style.display = '';
+    perfBtn.onclick = async () => {
+      // lazy fetch detailed perf with perf=1 for missing explains
+        try {
+          // Enrich SQL perf details if missing
+          const baseSql = '/api/player';
+          const sqlParams = window.__pp_last_params || `competition_id=${encodeURIComponent(cid)}&season=${encodeURIComponent(sea)}`;
+          if (!window.__pp_sql_perf || window.__pp_sql_perf.explain == null) {
+            const r = await fetch(`${baseSql}/${pid}/matches?${sqlParams}&perf=1`);
+            const j = await r.json();
+            if (j && j.perf) window.__pp_sql_perf = j.perf;
+          }
+        } catch(e) {}
+        try {
+          // Enrich Mongo perf details with execution stats totals
+          const baseMongo = '/api/mongo/player';
+          const mongoParams = window.__pp_last_params || `competition_id=${encodeURIComponent(cid)}&season=${encodeURIComponent(sea)}`;
+          if (!window.__pp_mongo_perf || window.__pp_mongo_perf.explain == null) {
+            const r = await fetch(`${baseMongo}/${pid}/matches?${mongoParams}&perf=1`);
+            const j = await r.json();
+            if (j && j.perf) window.__pp_mongo_perf = j.perf;
+          }
+        } catch(e) {}
+      openPlayerPerfModal({ perf: window.__pp_sql_perf }, { perf: window.__pp_mongo_perf });
+    };
+
+    // 4. Render Badges
+    if (compare) {
       const aLabel = sourceSel.toUpperCase();
       const bLabel = sourceSel === 'sql' ? 'Mongo' : 'SQL';
       const aMs = res.ms;
-      const bMs = compareRes.ms;
-      const aFaster = Number(aMs) < Number(bMs);
-      const bFaster = Number(bMs) < Number(aMs);
+      const bMs = compareRes?.ms; 
+      
+      const aNum = Number(aMs);
+      const bNum = Number(bMs);
+      const bothNums = Number.isFinite(aNum) && Number.isFinite(bNum);
+      
+      const aFaster = bothNums && aNum < bNum;
+      const bFaster = bothNums && bNum < aNum;
+      
       const aClass = aFaster ? 'faster' : (bFaster ? 'slower' : '');
       const bClass = bFaster ? 'faster' : (aFaster ? 'slower' : '');
+      
+      const bDisplay = (bMs === null || bMs === undefined) ? (compareRes?.error ? 'Err' : '—') : bMs;
+
       metaEl.innerHTML = `
         <span>${res.rows.length} matches</span>
         <span class="meta-badges" style="display:block;margin-top:.15rem;">
           <span class="meta-badge ${aClass}">${aLabel} ${aMs} ms</span>
           <span class="meta-sep">|</span>
-          <span class="meta-badge ${bClass}">${bLabel} ${bMs} ms</span>
+          <span class="meta-badge ${bClass}">${bLabel} ${bDisplay} ms</span>
           ${hasDiff ? '<span class="meta-diff">diff</span>' : ''}
         </span>
       `;
@@ -642,7 +727,7 @@
     });
   }
 
-  document.getElementById("pp-refresh").addEventListener("click", loadMatches);
+  document.getElementById("pp-refresh").addEventListener("click", () => loadMatches(true));
 
   async function openCompare(category, value, label) {
     const title = document.getElementById("mv-compare-title");
@@ -683,18 +768,23 @@
   }
 
   (async function init() {
-    await loadProfile();
-    await loadSeasonSummary();
-    await loadMatches();
-    await loadCareer();
+    // Ensure Compare toggle is visible immediately
     document.getElementById('pp-compare-wrap').classList.remove('d-none');
-    document.getElementById('pp-compare').addEventListener('change', loadMatches);
-    document.getElementById('pp-source').addEventListener('change', async () => {
+    try {
       await loadProfile();
       await loadSeasonSummary();
       await loadMatches();
       await loadCareer();
-    });
+    } finally {
+      // Attach listeners regardless of fetch outcomes
+      document.getElementById('pp-compare').addEventListener('change', () => loadMatches(false));
+      document.getElementById('pp-source').addEventListener('change', async () => {
+        await loadProfile();
+        await loadSeasonSummary();
+        await loadMatches();
+        await loadCareer();
+      });
+    }
   })();
 
   // diff helper for player matches
@@ -735,6 +825,113 @@
     }
     const body=wrap.querySelector('#pp-perf-body');
   body.innerHTML=`<h6 class="fw-semibold mb-2">${title}</h6><pre class="small bg-light p-2 rounded border" style="white-space:pre-wrap">${sqlText}</pre><table class="table table-sm mb-3"><tbody><tr><th style="width:180px">Execution time</th><td>${perf.execution_ms ?? '—'} ms</td></tr><tr><th>Diagnostics time</th><td>${perf.diagnostics_ms ?? '—'} ms</td></tr><tr><th>Total (exec + diag)</th><td>${perf.total_ms ?? '—'} ms</td></tr><tr><th style="width:180px">Rows examined</th><td>${perf.rows_examined ?? '—'}</td></tr><tr><th>Rows sent</th><td>${perf.rows_sent ?? '—'}</td></tr><tr><th>Explain type</th><td>${perf.explain_type ?? '—'}</td></tr></tbody></table><div class="mb-3"><div class="fw-semibold">Explain Plan</div><pre class="small bg-dark text-light p-2 rounded" style="max-height:240px;overflow:auto;white-space:pre-wrap">${(perf.explain||'No explain output')}</pre></div>`;
+    bootstrap.Modal.getOrCreateInstance(wrap).show();
+  }
+
+  function openPlayerPerfModal(sqlSection, mongoSection) {
+    const id = 'player-matches-perf-modal';
+    let wrap = document.getElementById(id);
+    if (!wrap) {
+      wrap = document.createElement('div');
+      wrap.id = id;
+      wrap.className = 'modal fade';
+      wrap.tabIndex = -1;
+      wrap.innerHTML = `<div class='modal-dialog modal-lg modal-dialog-scrollable'><div class='modal-content'><div class='modal-header'><h5 class='modal-title'>Player Matches Query Performance</h5><button type='button' class='btn-close' data-bs-dismiss='modal'></button></div><div class='modal-body'><div id='player-perf-body'></div></div><div class='modal-footer'><button type='button' class='btn btn-secondary' data-bs-dismiss='modal'>Close</button></div></div></div>`;
+      document.body.appendChild(wrap);
+    }
+    const body = wrap.querySelector('#player-perf-body');
+    const p = sqlSection?.perf || {};
+    const mp = mongoSection?.perf || {};
+    const renderSQL = () => !p || Object.keys(p).length===0 ? '' : `
+      <div class='mb-4'>
+        <h6 class='fw-semibold mb-2'>SQL</h6>
+        <table class='table table-sm'><tbody>
+          <tr><th style='width:220px'>Client elapsed ms</th><td>${window.__pp_sql_ms ?? '—'}</td></tr>
+          <tr><th>Exec ms (server)</th><td>${p.execution_ms ?? '—'}</td></tr>
+          <tr><th>Diag ms</th><td>${p.diagnostics_ms ?? '—'}</td></tr>
+          <tr><th>Rows examined</th><td>${p.rows_examined ?? '—'}</td></tr>
+          <tr><th>Rows sent</th><td>${p.rows_sent ?? '—'}</td></tr>
+          <tr><th>Explain type</th><td>${p.explain_type ?? '—'}</td></tr>
+        </tbody></table>
+        <div class='mb-3'><div class='fw-semibold'>Query</div><pre class='small bg-light p-2 rounded border' style='white-space:pre-wrap'>${p.query || ''}</pre></div>
+        <div class='mb-3'><div class='fw-semibold'>Explain</div><pre class='small bg-dark text-light p-2 rounded' style='max-height:240px;overflow:auto;white-space:pre-wrap'>${p.explain || 'No explain'}</pre></div>
+      </div>`;
+    const renderMongo = () => {
+      if (!mp || Object.keys(mp).length===0) return '';
+      const stats = mp.stats || {};
+      const order = [
+        ['docs_returned','Docs returned'],
+        ['totalDocsExamined','Docs examined'],
+        ['totalKeysExamined','Keys examined'],
+        ['nReturned','nReturned'],
+        ['executionTimeMillis','Exec ms (engine)']
+      ];
+      const seen = new Set();
+      const rows = [];
+      rows.push(`<tr><th style='width:220px'>Client elapsed ms</th><td>${window.__pp_mongo_ms ?? '—'}</td></tr>`);
+      // If core executionStats are missing, approximate like match view behavior
+      const hasCore = ['executionTimeMillis','nReturned','totalDocsExamined','totalKeysExamined'].some(k => stats[k] != null);
+      const approximated = !hasCore;
+      if (approximated) {
+        // Provide sensible fallbacks so users see something useful
+        const approx = {
+          executionTimeMillis: window.__pp_mongo_ms ?? null,
+          nReturned: stats.docs_returned ?? null,
+          totalDocsExamined: stats.docs_returned ?? null,
+          totalKeysExamined: null
+        };
+        // Merge approximations only for missing keys
+        for (const k of Object.keys(approx)) {
+          if (stats[k] == null && approx[k] != null) stats[k] = approx[k];
+        }
+      }
+      for (const [k,label] of order) {
+        if (stats[k] != null) { rows.push(`<tr><th>${label}</th><td>${stats[k]}</td></tr>`); seen.add(k); }
+      }
+      // append any additional stats returned by backend
+      Object.keys(stats).forEach(k => { if (!seen.has(k)) rows.push(`<tr><th>${k}</th><td>${stats[k]}</td></tr>`); });
+      const q = typeof mp.query==='string' ? mp.query : (mp.query ? JSON.stringify(mp.query, null, 2) : '');
+      // Robust explain/command output rendering: try multiple fields
+      const pickFirst = (obj, keys) => {
+        for (const k of keys) {
+          if (obj && obj[k] != null) return obj[k];
+        }
+        return null;
+      };
+      let explainObj = null;
+      // Common candidates that backend may set
+      explainObj = pickFirst(mp, [
+        'explain',            // preferred
+        'command_output',     // raw db.command result
+        'plan',               // any plan field
+        'raw',                // generic raw payload
+      ]);
+      // Also check nested under stats if backend tucked it there
+      if (!explainObj && stats) {
+        explainObj = pickFirst(stats, ['explain', 'command_output', 'raw']);
+      }
+      const explainText = (() => {
+        if (typeof explainObj === 'string') {
+          return explainObj.trim() || 'No explain';
+        }
+        if (explainObj) {
+          try { return JSON.stringify(explainObj, null, 2); } catch (_) { return String(explainObj); }
+        }
+        // As a last resort, show stats to avoid an empty section
+        if (stats && Object.keys(stats).length) {
+          try { return JSON.stringify(stats, null, 2); } catch (_) { return 'No explain'; }
+        }
+        return 'No explain';
+      })();
+      return `
+      <div class='mb-4'>
+        <h6 class='fw-semibold mb-2'>Mongo</h6>
+        <table class='table table-sm'><tbody>${rows.join('')}</tbody></table>
+        <div class='mb-3'><div class='fw-semibold'>Query</div><pre class='small bg-light p-2 rounded border' style='white-space:pre-wrap'>${q}</pre></div>
+        <div class='mb-3'><div class='fw-semibold'>Explain / Command Output</div><pre class='small bg-dark text-light p-2 rounded' style='max-height:240px;overflow:auto;white-space:pre-wrap'>${explainText}</pre></div>
+      </div>`;
+    };
+    body.innerHTML = renderSQL() + renderMongo();
     bootstrap.Modal.getOrCreateInstance(wrap).show();
   }
 </script>

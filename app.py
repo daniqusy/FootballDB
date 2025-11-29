@@ -1,4 +1,5 @@
 import os, time
+import json
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify, send_from_directory
 from dotenv import load_dotenv
@@ -2162,6 +2163,7 @@ def api_mongo_player_matches(pid):
   comp = request.args.get("competition_id")
   season = request.args.get("season")
   limit_n = int(request.args.get("n", 10))
+  want_perf = (request.args.get("perf") == "1")
 
   def _q(db):
     doc = db.player_seasons.find_one(
@@ -2204,7 +2206,72 @@ def api_mongo_player_matches(pid):
     return out
 
   rows, ms = run_mongo(_q)
-  return jsonify(dict(ms=ms, rows=rows))
+  # Build perf object similar to other endpoints
+  perf = {
+      "query": json.dumps({
+          "find": "player_seasons",
+          "filter": {"player_id": int(pid), "competition_id": comp, "season": season},
+          "projection": {"latest_matches": 1, "matches": 1},
+          "note": "client truncates to first N matches"
+      }, ensure_ascii=False, indent=2),
+      "stats": {"docs_returned": len(rows)}
+  }
+  if want_perf:
+      try:
+          explain = mongo_db.player_seasons.find(
+              {"player_id": int(pid), "competition_id": comp, "season": season},
+              {"latest_matches": 1, "matches": 1}
+          ).explain(verbosity="executionStats")
+          totals = mongo_exec_stats_totals(explain)
+          if totals:
+              perf["stats"].update(totals)
+          perf["explain"] = explain
+      except Exception:
+          pass
+      # Fallback: if totals were not populated, attempt aggregation explain
+      try:
+          need_fallback = True
+          try:
+              s = perf.get("stats", {})
+              if any(k in s for k in ("executionTimeMillis", "nReturned", "totalDocsExamined", "totalKeysExamined")):
+                  need_fallback = False
+          except Exception:
+              need_fallback = True
+          if need_fallback:
+              pipeline = [
+                  {"$match": {"player_id": int(pid), "competition_id": comp, "season": season}},
+                  {"$project": {"latest_matches": 1, "matches": 1}}
+              ]
+              agg_explain = mongo_db.player_seasons.aggregate(pipeline).explain("executionStats")
+              agg_totals = mongo_exec_stats_totals(agg_explain)
+              if agg_totals:
+                  perf["stats"].update(agg_totals)
+              # Prefer to set explain only if original was missing
+              if perf.get("explain") is None:
+                  perf["explain"] = agg_explain
+          # Second fallback: use command-level explain for find
+          s2 = perf.get("stats", {})
+          if not any(k in s2 for k in ("executionTimeMillis", "nReturned", "totalDocsExamined", "totalKeysExamined")):
+              try:
+                  cmd = {
+                      "explain": {
+                          "find": "player_seasons",
+                          "filter": {"player_id": int(pid), "competition_id": comp, "season": season},
+                          "projection": {"latest_matches": 1, "matches": 1}
+                      },
+                      "verbosity": "executionStats"
+                  }
+                  cmd_explain = mongo_db.command(cmd)
+                  cmd_totals = mongo_exec_stats_totals(cmd_explain)
+                  if cmd_totals:
+                      perf["stats"].update(cmd_totals)
+                  if perf.get("explain") is None:
+                      perf["explain"] = cmd_explain
+              except Exception:
+                  pass
+      except Exception:
+          pass
+  return jsonify(dict(ms=ms, rows=rows, perf=perf, source="mongo"))
 
 # Player career transfers
 @app.get("/api/player/<int:pid>/career")
