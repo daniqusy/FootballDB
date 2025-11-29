@@ -7,6 +7,22 @@
       <option value="sql">SQL</option>
       <option value="mongo">Mongo</option>
     </select>
+    <div
+      id="pf-compare-wrap"
+      class="form-check form-switch d-inline-block ms-3"
+      title="Compare SQL vs Mongo"
+      style="display: none"
+    >
+      <input class="form-check-input" type="checkbox" id="pf-compare" />
+      <label class="form-check-label small" for="pf-compare">Compare</label>
+    </div>
+    <button
+      id="pf-perf-more"
+      class="btn btn-link btn-sm text-decoration-none ms-2"
+      style="display: none"
+    >
+      More…
+    </button>
   </div>
   <form id="pf" class="row g-2 align-items-end">
     <div class="col-12 col-md-4 position-relative">
@@ -83,6 +99,11 @@
   const seasonSel = document.getElementById("season");
   const tbody = document.getElementById("pf-tbody");
   const meta = document.getElementById("pf-meta");
+  let pfPerfSQL = null,
+    pfPerfMongo = null;
+  let pfMsSQL = 0,
+    pfMsMongo = 0;
+  let pfLastQS = "";
 
   let typingTimer;
   nameInput.addEventListener("input", () => {
@@ -112,6 +133,8 @@
           playerIdEl.value = p.player_id;
           suggestBox.innerHTML = "";
           await loadCompetitions(p.player_id);
+          // show compare toggle once a player is selected
+          document.getElementById("pf-compare-wrap").style.display = "";
         };
         suggestBox.appendChild(a);
       });
@@ -167,6 +190,10 @@
       opt.textContent = r.season;
       seasonSel.appendChild(opt);
     });
+    // if compare is toggled, recompute timings on new season
+    if (document.getElementById("pf-compare").checked) {
+      computeCompareTimings();
+    }
   }
 
   // Run query
@@ -184,14 +211,53 @@
       season,
       n,
     }).toString();
+    pfLastQS = qs;
     const source = document.getElementById("pf-source").value;
+    const compare = document.getElementById("pf-compare").checked;
     const base =
       source === "mongo" ? "/api/mongo/player/form" : "/api/player/form";
     const res = await fetch(base + "?" + qs);
     const data = await res.json();
-    meta.textContent = `Source: ${source.toUpperCase()} • Query time: ${
-      data.ms
-    } ms`;
+    let other = null;
+    if (compare) {
+      const otherBase =
+        source === "sql" ? "/api/mongo/player/form" : "/api/player/form";
+      const r2 = await fetch(otherBase + "?" + qs);
+      other = await r2.json();
+    }
+    // store perfs
+    if (source === "sql") {
+      pfPerfSQL = data.perf;
+      pfMsSQL = data.ms;
+    } else {
+      pfPerfMongo = data.perf;
+      pfMsMongo = data.ms;
+    }
+    if (compare && other) {
+      if (source === "sql") {
+        pfPerfMongo = other.perf;
+        pfMsMongo = other.ms;
+      } else {
+        pfPerfSQL = other.perf;
+        pfMsSQL = other.ms;
+      }
+    }
+    // meta badges
+    if (compare && other) {
+      const aMs = data.ms,
+        bMs = other.ms;
+      const aFaster = Number(aMs) < Number(bMs);
+      const bFaster = Number(bMs) < Number(aMs);
+      const aClass = aFaster ? "faster" : bFaster ? "slower" : "";
+      const bClass = bFaster ? "faster" : aFaster ? "slower" : "";
+      meta.innerHTML = `<span class='meta-badges'><span class='meta-badge ${aClass}'>${source.toUpperCase()} ${aMs} ms</span><span class='meta-sep'>|</span><span class='meta-badge ${bClass}'>${
+        source === "sql" ? "Mongo" : "SQL"
+      } ${bMs} ms</span></span>`;
+    } else {
+      meta.innerHTML = `<span class='meta-badges'><span class='meta-badge'>${source.toUpperCase()} ${
+        data.ms
+      } ms</span></span>`;
+    }
     tbody.innerHTML = "";
     let sumMin = 0,
       sumG = 0,
@@ -235,6 +301,22 @@
     document.getElementById("pf-per90").textContent = `(G/90: ${g90.toFixed(
       2
     )}, A/90: ${a90.toFixed(2)})`;
+
+    // Perf button visibility and handler
+    const perfBtn = document.getElementById("pf-perf-more");
+    const hasPerf = Boolean(pfPerfSQL || pfPerfMongo);
+    perfBtn.style.display = hasPerf ? "" : "none";
+    perfBtn.onclick = async () => {
+      // lazy fetch mongo explain
+      if (pfPerfMongo && pfPerfMongo.explain == null) {
+        try {
+          const resp = await fetch(`/api/mongo/player/form?${pfLastQS}&perf=1`);
+          const j = await resp.json();
+          if (j.perf) pfPerfMongo = j.perf;
+        } catch {}
+      }
+      openPlayerFormPerfModal({ perf: pfPerfSQL }, { perf: pfPerfMongo });
+    };
   });
 
   // When source changes, re-load competitions/seasons if player already selected
@@ -246,5 +328,122 @@
     meta.textContent = "";
     tbody.innerHTML = "";
   });
+
+  async function computeCompareTimings() {
+    const pid = playerIdEl.value;
+    const comp = compSel.value;
+    const season = seasonSel.value;
+    const n = document.getElementById("n").value || 5;
+    if (!pid || !comp || !season) return;
+    const qs = new URLSearchParams({
+      player_id: pid,
+      competition_id: comp,
+      season,
+      n,
+    }).toString();
+    pfLastQS = qs;
+    try {
+      const [sqlRes, mongoRes] = await Promise.all([
+        fetch(`/api/player/form?${qs}`).then((r) => r.json()),
+        fetch(`/api/mongo/player/form?${qs}`).then((r) => r.json()),
+      ]);
+      pfPerfSQL = sqlRes.perf;
+      pfMsSQL = sqlRes.ms;
+      pfPerfMongo = mongoRes.perf;
+      pfMsMongo = mongoRes.ms;
+      const sqlFaster = Number(pfMsSQL) < Number(pfMsMongo);
+      const mongoFaster = Number(pfMsMongo) < Number(pfMsSQL);
+      const sqlClass = sqlFaster ? "faster" : mongoFaster ? "slower" : "";
+      const mongoClass = mongoFaster ? "faster" : sqlFaster ? "slower" : "";
+      meta.innerHTML = `<span class='meta-badges'><span class='meta-badge ${sqlClass}'>SQL ${pfMsSQL} ms</span><span class='meta-sep'>|</span><span class='meta-badge ${mongoClass}'>Mongo ${pfMsMongo} ms</span></span>`;
+      const perfBtn = document.getElementById("pf-perf-more");
+      perfBtn.style.display = "";
+      perfBtn.onclick = async () => {
+        if (pfPerfMongo && pfPerfMongo.explain == null) {
+          try {
+            const j = await fetch(
+              `/api/mongo/player/form?${pfLastQS}&perf=1`
+            ).then((r) => r.json());
+            if (j.perf) pfPerfMongo = j.perf;
+          } catch {}
+        }
+        openPlayerFormPerfModal({ perf: pfPerfSQL }, { perf: pfPerfMongo });
+      };
+    } catch (e) {
+      /* ignore */
+    }
+  }
+
+  document.getElementById("pf-compare").addEventListener("change", (e) => {
+    const wrap = document.getElementById("pf-compare-wrap");
+    if (!e.target.checked) {
+      return;
+    }
+    computeCompareTimings();
+  });
+
+  function openPlayerFormPerfModal(sqlSection, mongoSection) {
+    const id = "pf-perf-modal";
+    let wrap = document.getElementById(id);
+    if (!wrap) {
+      wrap = document.createElement("div");
+      wrap.id = id;
+      wrap.className = "modal fade";
+      wrap.tabIndex = -1;
+      wrap.innerHTML = `<div class='modal-dialog modal-lg modal-dialog-scrollable'><div class='modal-content'><div class='modal-header'><h5 class='modal-title'>Player Form Query Performance</h5><button type='button' class='btn-close' data-bs-dismiss='modal'></button></div><div class='modal-body'><div id='pf-perf-body'></div></div><div class='modal-footer'><button type='button' class='btn btn-secondary' data-bs-dismiss='modal'>Close</button></div></div></div>`;
+      document.body.appendChild(wrap);
+    }
+    const body = wrap.querySelector("#pf-perf-body");
+    const renderSQL = () => {
+      const p = sqlSection?.perf;
+      if (!p) return "";
+      return `<div class='mb-4'><h6 class='fw-semibold mb-2'>SQL</h6>
+        <table class='table table-sm'><tbody>
+          <tr><th style='width:180px'>Exec ms</th><td>${
+            p.execution_ms ?? "—"
+          }</td></tr>
+          <tr><th>Diag ms</th><td>${p.diagnostics_ms ?? "—"}</td></tr>
+          <tr><th>Rows examined</th><td>${p.rows_examined ?? "—"}</td></tr>
+          <tr><th>Rows sent</th><td>${p.rows_sent ?? "—"}</td></tr>
+          <tr><th>Explain type</th><td>${p.explain_type ?? "—"}</td></tr>
+        </tbody></table>
+        <div class='mb-3'><div class='fw-semibold'>Query</div><pre class='small bg-light p-2 rounded border' style='white-space:pre-wrap'>${
+          p.query || ""
+        }</pre></div>
+        <div class='mb-3'><div class='fw-semibold'>Explain</div><pre class='small bg-dark text-light p-2 rounded' style='max-height:240px;overflow:auto;white-space:pre-wrap'>${
+          p.explain || "No explain"
+        }</pre></div>
+      </div>`;
+    };
+    const renderMongo = () => {
+      const mp = mongoSection?.perf || {};
+      if (!mp || Object.keys(mp).length === 0) return "";
+      const statsRows = mp.stats
+        ? Object.keys(mp.stats)
+            .map(
+              (k) =>
+                `<tr><th style='width:180px'>${k}</th><td>${mp.stats[k]}</td></tr>`
+            )
+            .join("")
+        : "";
+      const q = mp.query
+        ? typeof mp.query === "string"
+          ? mp.query
+          : JSON.stringify(mp.query, null, 2)
+        : "";
+      const explainText = mp.explain
+        ? typeof mp.explain === "string"
+          ? mp.explain
+          : JSON.stringify(mp.explain, null, 2)
+        : "No explain";
+      return `<div class='mb-4'><h6 class='fw-semibold mb-2'>Mongo</h6>
+        <table class='table table-sm'><tbody>${statsRows}</tbody></table>
+        <div class='mb-3'><div class='fw-semibold'>Query</div><pre class='small bg-light p-2 rounded border' style='white-space:pre-wrap'>${q}</pre></div>
+        <div class='mb-3'><div class='fw-semibold'>Explain / Command Output</div><pre class='small bg-dark text-light p-2 rounded' style='max-height:240px;overflow:auto;white-space:pre-wrap'>${explainText}</pre></div>
+      </div>`;
+    };
+    body.innerHTML = renderSQL() + renderMongo();
+    bootstrap.Modal.getOrCreateInstance(wrap).show();
+  }
 </script>
 {% endblock %}

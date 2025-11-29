@@ -228,6 +228,107 @@ def api_player_form():
     rows, ms, perf = run_sql_ex(sql, (player_id, comp, season, n))
     return jsonify(dict(ms=ms, rows=rows, perf=perf))
 
+# Mongo: Player Form over N
+@app.get("/api/mongo/player/form")
+def api_mongo_player_form():
+    try:
+        player_id = int(request.args.get("player_id"))
+        comp = request.args.get("competition_id")
+        season = request.args.get("season")
+        n = int(request.args.get("n", 5))
+    except Exception:
+        return jsonify(dict(ms=0, rows=[], source="mongo", error="invalid-params")), 400
+
+    want_perf = (request.args.get("perf") == "1")
+
+    def _q(db):
+        # Fetch games for this competition/season first
+        gcur = db.games.find({"competition_id": comp, "season": season}, {
+            "_id": 1, "date": 1,
+            "home.club_id": 1, "home.name": 1,
+            "away.club_id": 1, "away.name": 1,
+        })
+        game_map = {}
+        game_ids = []
+        for g in gcur:
+            gid = g.get("_id")
+            if gid is None:
+                continue
+            game_ids.append(gid)
+            h = g.get("home") or {}
+            a = g.get("away") or {}
+            game_map[gid] = {
+                "date_str": g.get("date"),
+                "home_club_id": h.get("club_id"),
+                "home_name": h.get("name"),
+                "away_club_id": a.get("club_id"),
+                "away_name": a.get("name"),
+            }
+        if not game_ids:
+            return []
+        # Pull appearances for this player restricted to those games
+        acur = db.appearances.find({
+            "player_id": int(player_id),
+            "game_id": {"$in": game_ids}
+        }, {
+            "game_id": 1,
+            "player_club_id": 1,
+            "minutes_played": 1,
+            "goals": 1,
+            "assists": 1,
+            "date": 1,
+        })
+        out = []
+        for a in acur:
+            gid = a.get("game_id")
+            g = game_map.get(gid) or {}
+            out.append({
+                "game_id": gid,
+                "date_str": g.get("date_str") or a.get("date"),
+                "minutes_played": a.get("minutes_played"),
+                "goals": a.get("goals"),
+                "assists": a.get("assists"),
+                "player_club_id": a.get("player_club_id"),
+                "home_club_id": g.get("home_club_id"),
+                "home_name": g.get("home_name"),
+                "away_club_id": g.get("away_club_id"),
+                "away_name": g.get("away_name"),
+            })
+        # Sort by date desc (YYYY-MM-DD lexical works) and limit n
+        out.sort(key=lambda r: (r.get("date_str") or ""), reverse=True)
+        return out[:n]
+
+    rows, exec_ms = run_mongo(_q)
+    # Perf details
+    import json
+    perf = {
+        "query": json.dumps({
+            "games.find": {"competition_id": comp, "season": season},
+            "appearances.find": {"player_id": player_id, "game_id": "IN(<games>)"},
+            "limit": n
+        }, ensure_ascii=False, indent=2),
+        "stats": {"docs_returned": len(rows)}
+    }
+    if want_perf:
+        try:
+            # Explain appearances find with $in on game_ids is complex to build without re-running game fetch;
+            # Run a simplified explain on player_id filter as pragmatic signal.
+            exp = mongo_db.command({
+                "explain": {
+                    "find": "appearances",
+                    "filter": {"player_id": int(player_id)}
+                },
+                "verbosity": "executionStats"
+            })
+            perf["explain"] = exp
+            perf["stats"].update(mongo_exec_stats_totals(exp))
+        except Exception:
+            perf["explain"] = None
+    else:
+        perf["explain"] = None
+
+    return jsonify(dict(ms=exec_ms, rows=rows, perf=perf, source="mongo"))
+
 # Top scorers by league-season with pagination
 @app.route("/top-scorers")
 def top_scorers_page():
