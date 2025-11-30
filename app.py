@@ -2188,6 +2188,7 @@ def api_mongo_player_matches(pid):
       home_name = m.get("home_name") or (f"Club {home_id}" if home_id is not None else None)
       away_name = m.get("away_name") or (f"Club {away_id}" if away_id is not None else None)
       out.append({
+        "game_id": m.get("game_id"),
         "date_str": m.get("date_str") or m.get("date"),
         "competition_id": comp,
         "season": season,
@@ -2203,6 +2204,35 @@ def api_mongo_player_matches(pid):
         "home_club_goals": first_not_none(m.get("home_club_goals"), m.get("home_goals"), m.get("home_score"), m.get("hg")),
         "away_club_goals": first_not_none(m.get("away_club_goals"), m.get("away_goals"), m.get("away_score"), m.get("ag")),
       })
+    # Enrich missing card counts from appearances collection if not embedded in latest_matches
+    try:
+        need_enrich = any(r.get("yellow_cards") is None and r.get("red_cards") is None for r in out)
+        if need_enrich:
+            game_ids = [r.get("game_id") for r in out if r.get("game_id") is not None]
+            if game_ids:
+                cur = db.appearances.find({
+                    "player_id": int(pid),
+                    "game_id": {"$in": game_ids}
+                }, {"game_id":1, "yellow_cards":1, "red_cards":1})
+                cards_map = {}
+                for a in cur:
+                    gid = a.get("game_id")
+                    if gid is None: continue
+                    cards_map[gid] = {
+                        "yellow_cards": a.get("yellow_cards"),
+                        "red_cards": a.get("red_cards")
+                    }
+                for r in out:
+                    if r.get("yellow_cards") is None or r.get("red_cards") is None:
+                        gid = r.get("game_id")
+                        cm = cards_map.get(gid)
+                        if cm:
+                            if r.get("yellow_cards") is None:
+                                r["yellow_cards"] = cm.get("yellow_cards") or 0
+                            if r.get("red_cards") is None:
+                                r["red_cards"] = cm.get("red_cards") or 0
+    except Exception:
+        pass
     return out
 
   rows, ms = run_mongo(_q)

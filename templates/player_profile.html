@@ -433,6 +433,7 @@
   }
 
   let seasonsByComp = {};
+  let seasonTotalsByKey = {}; // key: `${competition_id}|${season}` => {minutes, goals, assists, yc, rc}
   async function loadSeasonSummary() {
     const source = document.getElementById('pp-source').value;
     const base = source === 'mongo' ? '/api/mongo/player' : '/api/player';
@@ -440,8 +441,18 @@
     const compSel = document.getElementById("pp-comp");
     const seaSel = document.getElementById("pp-season");
     seasonsByComp = {};
+    seasonTotalsByKey = {};
     s.rows.forEach((r) => {
       (seasonsByComp[r.competition_id] ||= []).push(r.season);
+      const key = `${r.competition_id}|${r.season}`;
+      const totals = (r.totals && typeof r.totals === 'object') ? r.totals : r;
+      seasonTotalsByKey[key] = {
+        minutes: totals.minutes ?? totals.min ?? 0,
+        goals: totals.goals ?? totals.g ?? 0,
+        assists: totals.assists ?? totals.a ?? 0,
+        yc: totals.yc ?? totals.yellow_cards ?? totals.yellow ?? 0,
+        rc: totals.rc ?? totals.red_cards ?? totals.red ?? 0,
+      };
     });
     // ensure seasons are unique and newest first
     Object.keys(seasonsByComp).forEach((cid) => {
@@ -643,11 +654,17 @@
       y = 0,
       r = 0;
     res.rows.forEach((row) => {
-      g += row.goals || 0;
-      a += row.assists || 0;
-      m += row.minutes_played || 0;
-      y += row.yellow_cards || 0;
-      r += row.red_cards || 0;
+      // Normalize field names across SQL/Mongo variants
+      const goals = row.goals ?? row.goal_count ?? 0;
+      const assists = row.assists ?? row.assist_count ?? 0;
+      const minutes = row.minutes_played ?? row.minutes ?? 0;
+      const yellow = row.yellow_cards ?? row.yellow_cards_count ?? row.yc ?? 0;
+      const red = row.red_cards ?? row.red_cards_count ?? row.rc ?? 0;
+      g += goals;
+      a += assists;
+      m += minutes;
+      y += yellow;
+      r += red;
       const tr = document.createElement("tr");
       let opponent = "";
       if (playerClubName) {
@@ -689,13 +706,22 @@
       <td>${formattedDate}</td>
       <td>${fixture}</td>
       <td>${score}</td>
-      <td class="text-end">${row.minutes_played || 0}</td>
-      <td class="text-end">${row.goals || 0}</td>
-      <td class="text-end">${row.assists || 0}</td>
-      <td class="text-end">${row.yellow_cards || 0}</td>
-      <td class="text-end">${row.red_cards || 0}</td>`;
+      <td class="text-end">${minutes}</td>
+      <td class="text-end">${goals}</td>
+      <td class="text-end">${assists}</td>
+      <td class="text-end">${yellow}</td>
+      <td class="text-end">${red}</td>`;
       tb.appendChild(tr);
     });
+    // Fallback for Mongo: if per-match cards are missing, use season totals for the selected comp+season
+    if ((sourceSel === 'mongo') && (!y || !r)) {
+      const key = `${cid}|${sea}`;
+      const t = seasonTotalsByKey[key];
+      if (t) {
+        if (!y && t.yc != null) y = t.yc;
+        if (!r && t.rc != null) r = t.rc;
+      }
+    }
     document.getElementById("st-goals").textContent = g;
     document.getElementById("st-assists").textContent = a;
     document.getElementById("st-min").textContent = m.toLocaleString();
